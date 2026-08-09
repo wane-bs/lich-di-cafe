@@ -1,0 +1,98 @@
+[
+  {
+    "id": "v1",
+    "name": "The Coffee House - Nguyễn Trãi",
+    "category": "cafe",
+    "time_tags": ["morning", "afternoon"],
+    "price_range": "$$",
+    "capacity": 30,
+    "address": "141 Nguyễn Trãi, Quận 1, TP.HCM",
+    "tags": ["cà phê", "yên tĩnh", "làm việc", "máy lạnh"],
+    "rating": 4.6,
+    "image_url": "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v2",
+    "name": "Quán Bụi - Vietnamese Bistro",
+    "category": "restaurant",
+    "time_tags": ["noon", "evening"],
+    "price_range": "$$$",
+    "capacity": 50,
+    "address": "19 Ngô Văn Năm, Quận 1, TP.HCM",
+    "tags": ["ăn trưa", "ăn tối", "món việt", "không gian đẹp"],
+    "rating": 4.8,
+    "image_url": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v3",
+    "name": "Boardgame Station Hub",
+    "category": "entertainment",
+    "time_tags": ["afternoon", "evening"],
+    "price_range": "$$",
+    "capacity": 25,
+    "address": "30 Trần Cao Vân, Quận 3, TP.HCM",
+    "tags": ["boardgame", "vui chơi", "giải trí", "nhóm đông"],
+    "rating": 4.7,
+    "image_url": "https://images.unsplash.com/photo-1610890716171-6b1bb98ffd09?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v4",
+    "name": "Acoustic Bar & Coffee",
+    "category": "pub",
+    "time_tags": ["evening"],
+    "price_range": "$$$",
+    "capacity": 40,
+    "address": "6E Ngô Thời Nhiệm, Quận 3, TP.HCM",
+    "tags": ["nhạc sống", "acoustic", "pub", "chill", "ăn tối"],
+    "rating": 4.9,
+    "image_url": "https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v5",
+    "name": "Công Viên Tao Đàn - Cà Phê Sáng",
+    "category": "cafe",
+    "time_tags": ["morning"],
+    "price_range": "$",
+    "capacity": 100,
+    "address": "Trương Định, Quận 1, TP.HCM",
+    "tags": ["cà phê", "ngoài trời", "thoáng mát", "dã ngoại"],
+    "rating": 4.5,
+    "image_url": "https://images.unsplash.com/photo-1519331379826-f10be5486c6f?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v6",
+    "name": "Pizza 4P's Bến Thành",
+    "category": "restaurant",
+    "time_tags": ["noon", "evening"],
+    "price_range": "$$$",
+    "capacity": 60,
+    "address": "8 Thủ Khoa Huân, Quận 1, TP.HCM",
+    "tags": ["pizza", "ăn trưa", "ăn tối", "nhà hàng"],
+    "rating": 4.9,
+    "image_url": "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v7",
+    "name": "Cà Phê Trứng Giảng",
+    "category": "cafe",
+    "time_tags": ["morning", "afternoon"],
+    "price_range": "$",
+    "capacity": 35,
+    "address": "39 Nguyễn Hữu Huân, Hoàn Kiếm, Hà Nội",
+    "tags": ["cà phê trứng", "truyền thống", "cà phê"],
+    "rating": 4.7,
+    "image_url": "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=500&auto=format&fit=crop"
+  },
+  {
+    "id": "v8",
+    "name": "Bowling Center LandMark 81",
+    "category": "entertainment",
+    "time_tags": ["afternoon", "evening"],
+    "price_range": "$$$",
+    "capacity": 40,
+    "address": "720A Điện Biên Phủ, Bình Thạnh, TP.HCM",
+    "tags": ["bowling", "vui chơi", "vận động", "giải trí"],
+    "rating": 4.8,
+    "image_url": "https://images.unsplash.com/photo-1538356111056-a93a36d7cd92?w=500&auto=format&fit=crop"
+  }
+]

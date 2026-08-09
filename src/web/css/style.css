@@ -1,0 +1,40 @@
+/* Custom CSS for Hangout Planner */
+.slot-btn {
+    transition: all 0.15s ease-in-out;
+}
+
+.slot-selected {
+    background-color: #10B981 !important;
+    color: white !important;
+    border-color: #059669 !important;
+    transform: scale(1.02);
+}
+
+.heatmap-cell {
+    transition: background-color 0.25s ease, transform 0.15s ease;
+}
+.heatmap-cell:hover {
+    transform: scale(1.05);
+    z-index: 10;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* Pyodide loader overlay */
+#pyodide-loading-indicator {
+    transition: opacity 0.3s ease;
+}
