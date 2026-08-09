@@ -10,7 +10,6 @@ htmlcov/
 
 # Agent Customizations & Workflows
 .agents/
-.github/
 
 # Virtual Environments
 venv/
