@@ -55,6 +55,23 @@ class Member:
     matrix: List[List[int]]
 
 @dataclass
+class Venue:
+    id: str
+    name: str
+    category: str
+    time_tags: List[str]
+    price_range: str
+    capacity: int
+    address: str
+    tags: List[str]
+    city: str = "TP. Hồ Chí Minh"
+    ward: str = "Phường Bến Nghé"
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    rating: float = 4.5
+    image_url: str = ""
+
+@dataclass
 class Group:
     members: List[Member]
     threshold_pct: float = 0.8

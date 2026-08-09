@@ -8,6 +8,9 @@ window.app = {
     venues: [],
     selectedSlot: null,
     lockedPlan: null,
+    leafletMap: null,
+    markersLayer: null,
+    currentVenueView: 'list',
 
     async init() {
         console.log("[App] Initializing Hangout Planner...");
@@ -34,17 +37,39 @@ window.app = {
     async loadVenues() {
         try {
             const resp = await fetch('data/venues.json');
+            let baseVenues = [];
             if (resp.ok) {
-                this.venues = await resp.json();
-                console.log(`[App] Loaded ${this.venues.length} venues from database.`);
+                baseVenues = await resp.json();
             } else {
-                console.warn("[App] Could not fetch venues.json directly, fallback data active.");
-                this.venues = this.getFallbackVenues();
+                baseVenues = this.getFallbackVenues();
             }
+
+            const customVenues = this.getCustomVenues();
+            this.venues = [...baseVenues, ...customVenues];
+            console.log(`[App] Loaded ${this.venues.length} venues (${baseVenues.length} base, ${customVenues.length} custom).`);
         } catch (e) {
             console.warn("[App] Error loading venues.json, using fallback:", e);
-            this.venues = this.getFallbackVenues();
+            const customVenues = this.getCustomVenues();
+            this.venues = [...this.getFallbackVenues(), ...customVenues];
         }
+
+        this.populateCityFilter();
+    },
+
+    getCustomVenues() {
+        try {
+            const saved = localStorage.getItem('custom_venues');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("[App] Failed parsing custom venues from localStorage", e);
+            return [];
+        }
+    },
+
+    saveCustomVenue(venue) {
+        const custom = this.getCustomVenues();
+        custom.push(venue);
+        localStorage.setItem('custom_venues', JSON.stringify(custom));
     },
 
     getFallbackVenues() {
@@ -56,7 +81,11 @@ window.app = {
                 time_tags: ["morning", "afternoon"],
                 price_range: "$$",
                 capacity: 30,
-                address: "141 Nguyễn Trãi, Quận 1, TP.HCM",
+                address: "141 Nguyễn Trãi, Phường Phạm Ngũ Lão, TP. Hồ Chí Minh",
+                city: "TP. Hồ Chí Minh",
+                ward: "Phường Phạm Ngũ Lão",
+                lat: 10.7686,
+                lng: 106.6918,
                 tags: ["cà phê", "yên tĩnh", "làm việc"],
                 rating: 4.6,
                 image_url: "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500&auto=format&fit=crop"
@@ -68,7 +97,11 @@ window.app = {
                 time_tags: ["noon", "evening"],
                 price_range: "$$$",
                 capacity: 50,
-                address: "19 Ngô Văn Năm, Quận 1, TP.HCM",
+                address: "19 Ngô Văn Năm, Phường Bến Nghé, TP. Hồ Chí Minh",
+                city: "TP. Hồ Chí Minh",
+                ward: "Phường Bến Nghé",
+                lat: 10.7812,
+                lng: 106.7056,
                 tags: ["ăn trưa", "ăn tối", "món việt"],
                 rating: 4.8,
                 image_url: "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=500&auto=format&fit=crop"
@@ -80,7 +113,11 @@ window.app = {
                 time_tags: ["afternoon", "evening"],
                 price_range: "$$",
                 capacity: 25,
-                address: "30 Trần Cao Vân, Quận 3, TP.HCM",
+                address: "30 Trần Cao Vân, Phường Võ Thị Sáu, TP. Hồ Chí Minh",
+                city: "TP. Hồ Chí Minh",
+                ward: "Phường Võ Thị Sáu",
+                lat: 10.7834,
+                lng: 106.6961,
                 tags: ["boardgame", "vui chơi", "giải trí"],
                 rating: 4.7,
                 image_url: "https://images.unsplash.com/photo-1610890716171-6b1bb98ffd09?w=500&auto=format&fit=crop"
@@ -298,42 +335,231 @@ window.app = {
         this.renderVenueRecommendations(slot.slot_tag);
     },
 
-    renderVenueRecommendations(slotTag) {
-        const container = document.getElementById("venue-list-container");
-        if (!container) return;
+    populateCityFilter() {
+        const citySelect = document.getElementById("filter-city");
+        if (!citySelect) return;
 
-        // Filter venues matching slot tag
-        const filtered = this.venues.filter(v => v.time_tags.includes(slotTag) || v.time_tags.includes("all"));
+        const cities = Array.from(new Set(this.venues.map(v => v.city || "TP. Hồ Chí Minh"))).sort();
+        citySelect.innerHTML = `<option value="all">Tất cả Tỉnh / Thành phố</option>` +
+            cities.map(c => `<option value="${c}">${c}</option>`).join("");
 
-        if (filtered.length === 0) {
-            container.innerHTML = `<p class="text-slate-500 py-6 text-center">Chưa tìm thấy địa điểm phù hợp cho khung giờ này.</p>`;
-            return;
+        this.populateWardFilter("all");
+    },
+
+    onCityFilterChange() {
+        const citySelect = document.getElementById("filter-city");
+        const selectedCity = citySelect ? citySelect.value : "all";
+        this.populateWardFilter(selectedCity);
+        this.applyVenueFilters();
+    },
+
+    populateWardFilter(selectedCity) {
+        const wardSelect = document.getElementById("filter-ward");
+        if (!wardSelect) return;
+
+        let filtered = this.venues;
+        if (selectedCity && selectedCity !== "all") {
+            filtered = filtered.filter(v => (v.city || "").toLowerCase() === selectedCity.toLowerCase());
         }
 
-        container.innerHTML = filtered.map(v => `
-            <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row hover:shadow-md transition">
-                <img src="${v.image_url}" alt="${v.name}" class="w-full md:w-48 h-40 object-cover">
-                <div class="p-4 flex-1 flex flex-col justify-between space-y-2">
-                    <div>
-                        <div class="flex justify-between items-start">
-                            <h3 class="font-bold text-slate-900 text-base">${v.name}</h3>
-                            <span class="text-amber-500 font-bold text-xs"><i class="fa-solid fa-star mr-1"></i>${v.rating}</span>
-                        </div>
-                        <p class="text-xs text-slate-500"><i class="fa-solid fa-location-dot mr-1 text-rose-500"></i>${v.address}</p>
-                        <div class="flex flex-wrap gap-1 mt-2">
-                            ${v.tags.map(t => `<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[11px]">${t}</span>`).join("")}
+        const wards = Array.from(new Set(filtered.map(v => v.ward).filter(Boolean))).sort();
+        wardSelect.innerHTML = `<option value="all">Tất cả Xã / Phường</option>` +
+            wards.map(w => `<option value="${w}">${w}</option>`).join("");
+    },
+
+    applyVenueFilters() {
+        const slotTag = this.selectedSlot ? this.selectedSlot.slot_tag : "all";
+        this.renderVenueRecommendations(slotTag);
+    },
+
+    switchVenueView(mode) {
+        this.currentVenueView = mode;
+        const listBtn = document.getElementById("btn-view-list");
+        const mapBtn = document.getElementById("btn-view-map");
+        const listContainer = document.getElementById("venue-list-container");
+        const mapContainer = document.getElementById("venue-map-container");
+
+        if (mode === "map") {
+            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
+            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm";
+            if (listContainer) listContainer.classList.add("hidden");
+            if (mapContainer) mapContainer.classList.remove("hidden");
+
+            // Refilter & trigger map resize
+            this.applyVenueFilters();
+            if (this.leafletMap) {
+                setTimeout(() => this.leafletMap.invalidateSize(), 200);
+            }
+        } else {
+            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm";
+            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
+            if (listContainer) listContainer.classList.remove("hidden");
+            if (mapContainer) mapContainer.classList.add("hidden");
+
+            this.applyVenueFilters();
+        }
+    },
+
+    renderVenueRecommendations(slotTag) {
+        const listContainer = document.getElementById("venue-list-container");
+        const cityFilter = document.getElementById("filter-city")?.value || "all";
+        const wardFilter = document.getElementById("filter-ward")?.value || "all";
+        const catFilter = document.getElementById("filter-category")?.value || "all";
+
+        // Filter venues
+        let filtered = this.venues;
+
+        if (slotTag && slotTag !== "all") {
+            filtered = filtered.filter(v => v.time_tags.includes(slotTag) || v.time_tags.includes("all"));
+        }
+
+        if (cityFilter !== "all") {
+            filtered = filtered.filter(v => (v.city || "").toLowerCase() === cityFilter.toLowerCase());
+        }
+
+        if (wardFilter !== "all") {
+            filtered = filtered.filter(v => (v.ward || "").toLowerCase() === wardFilter.toLowerCase());
+        }
+
+        if (catFilter !== "all") {
+            filtered = filtered.filter(v => v.category === catFilter);
+        }
+
+        // Render List View
+        if (listContainer) {
+            if (filtered.length === 0) {
+                listContainer.innerHTML = `<div class="p-8 text-center text-slate-500 bg-white rounded-xl border"><i class="fa-solid fa-store-slash text-3xl mb-2 text-slate-300"></i><p>Không tìm thấy địa điểm phù hợp bộ lọc.</p></div>`;
+            } else {
+                listContainer.innerHTML = filtered.map(v => `
+                    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row hover:shadow-md transition">
+                        <img src="${v.image_url || 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500'}" alt="${v.name}" class="w-full md:w-48 h-40 object-cover">
+                        <div class="p-4 flex-1 flex flex-col justify-between space-y-2">
+                            <div>
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <h3 class="font-bold text-slate-900 text-base">${v.name}</h3>
+                                        <span class="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">${v.ward || ''}, ${v.city || ''}</span>
+                                    </div>
+                                    <span class="text-amber-500 font-bold text-xs"><i class="fa-solid fa-star mr-1"></i>${v.rating}</span>
+                                </div>
+                                <p class="text-xs text-slate-500 mt-1"><i class="fa-solid fa-location-dot mr-1 text-rose-500"></i>${v.address}</p>
+                                <div class="flex flex-wrap gap-1 mt-2">
+                                    ${(v.tags || []).map(t => `<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[11px]">${t}</span>`).join("")}
+                                </div>
+                            </div>
+                            <div class="flex justify-between items-center border-t pt-2 mt-2">
+                                <span class="text-xs font-semibold text-indigo-600">${v.price_range} • Sức chứa ${v.capacity} người</span>
+                                <button onclick="window.app.lockFinalPlan('${v.id}')" 
+                                        class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition">
+                                    <i class="fa-solid fa-check-double mr-1"></i>Chốt Địa Điểm Này
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <div class="flex justify-between items-center border-t pt-2 mt-2">
-                        <span class="text-xs font-semibold text-indigo-600">${v.price_range} • Sức chứa ${v.capacity} người</span>
-                        <button onclick="window.app.lockFinalPlan('${v.id}')" 
-                                class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition">
+                `).join("");
+            }
+        }
+
+        // Render Map View if active or ready
+        this.renderMapView(filtered);
+    },
+
+    renderMapView(filteredVenues) {
+        const mapContainer = document.getElementById("venue-map-container");
+        if (!mapContainer || typeof L === 'undefined') return;
+
+        if (!this.leafletMap) {
+            this.leafletMap = L.map('venue-map-container').setView([10.7769, 106.7009], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(this.leafletMap);
+            this.markersLayer = L.layerGroup().addTo(this.leafletMap);
+        }
+
+        this.markersLayer.clearLayers();
+        const bounds = [];
+
+        filteredVenues.forEach(v => {
+            if (v.lat && v.lng) {
+                const marker = L.marker([v.lat, v.lng]);
+                const popupHtml = `
+                    <div class="space-y-1.5 text-xs p-1">
+                        <img src="${v.image_url || 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500'}" class="w-full h-24 object-cover rounded mb-1">
+                        <strong class="text-slate-900 text-sm block">${v.name}</strong>
+                        <p class="text-slate-500"><i class="fa-solid fa-location-dot text-rose-500 mr-1"></i>${v.address}</p>
+                        <p class="text-indigo-600 font-semibold">${v.price_range} • Sức chứa ${v.capacity}p • ⭐ ${v.rating}</p>
+                        <button onclick="window.app.lockFinalPlan('${v.id}')" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold mt-2">
                             <i class="fa-solid fa-check-double mr-1"></i>Chốt Địa Điểm Này
                         </button>
                     </div>
-                </div>
-            </div>
-        `).join("");
+                `;
+                marker.bindPopup(popupHtml);
+                this.markersLayer.addLayer(marker);
+                bounds.push([v.lat, v.lng]);
+            }
+        });
+
+        if (bounds.length > 0) {
+            this.leafletMap.fitBounds(bounds, { padding: [40, 40] });
+        }
+    },
+
+    openAddVenueModal() {
+        const modal = document.getElementById("add-venue-modal");
+        if (modal) modal.classList.remove("hidden");
+    },
+
+    closeAddVenueModal() {
+        const modal = document.getElementById("add-venue-modal");
+        if (modal) modal.classList.add("hidden");
+    },
+
+    saveNewVenue(e) {
+        e.preventDefault();
+
+        const name = document.getElementById("new-venue-name").value.trim();
+        const category = document.getElementById("new-venue-category").value;
+        const price = document.getElementById("new-venue-price").value;
+        const capacity = parseInt(document.getElementById("new-venue-capacity").value, 10) || 30;
+        const rating = parseFloat(document.getElementById("new-venue-rating").value) || 4.5;
+        const city = document.getElementById("new-venue-city").value.trim() || "TP. Hồ Chí Minh";
+        const ward = document.getElementById("new-venue-ward").value.trim() || "Phường Bến Nghé";
+        const address = document.getElementById("new-venue-address").value.trim();
+        const lat = parseFloat(document.getElementById("new-venue-lat").value) || 10.7769;
+        const lng = parseFloat(document.getElementById("new-venue-lng").value) || 106.7009;
+        const tagsStr = document.getElementById("new-venue-tags").value.trim();
+        const imageUrl = document.getElementById("new-venue-image").value.trim() || "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500";
+
+        const timeTagBoxes = document.querySelectorAll('#form-add-venue input[name="time_tags"]:checked');
+        const timeTags = Array.from(timeTagBoxes).map(b => b.value);
+
+        const newVenue = {
+            id: "v_custom_" + Date.now(),
+            name: name,
+            category: category,
+            price_range: price,
+            capacity: capacity,
+            rating: rating,
+            city: city,
+            ward: ward,
+            address: address,
+            lat: lat,
+            lng: lng,
+            time_tags: timeTags.length > 0 ? timeTags : ["all"],
+            tags: tagsStr ? tagsStr.split(",").map(t => t.trim()) : ["tự thêm"],
+            image_url: imageUrl
+        };
+
+        this.saveCustomVenue(newVenue);
+        this.venues.push(newVenue);
+
+        this.closeAddVenueModal();
+        document.getElementById("form-add-venue").reset();
+
+        this.populateCityFilter();
+        this.applyVenueFilters();
+
+        alert(`Đã thêm địa điểm "${name}" thành công!`);
     },
 
     lockFinalPlan(venueId) {

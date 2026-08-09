@@ -74,5 +74,10 @@ class Venue:
     capacity: int
     address: str
     tags: List[str]            # ["cà phê", "yên tĩnh", "boardgame", "ăn trưa"]
+    city: str = "TP. Hồ Chí Minh"
+    ward: str = "Phường Bến Nghé"
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     rating: float = 4.5
     image_url: str = ""
+

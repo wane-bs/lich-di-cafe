@@ -10,6 +10,10 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="css/style.css">
 
+    <!-- Leaflet OpenStreetMap CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <!-- Pyodide WebAssembly Python Runtime Engine -->
     <script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
 </head>
@@ -155,15 +159,178 @@
                 </div>
             </div>
 
-            <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
-                <h3 class="text-base font-bold text-slate-900 border-b pb-2 flex items-center gap-2">
-                    <i class="fa-solid fa-store text-indigo-600"></i> Danh Sách Đề Xuất Phù Hợp
-                </h3>
-                <div id="venue-list-container" class="space-y-4">
-                    <!-- Rendered by App -->
+            <!-- Toolbar & Filter Area -->
+            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                    <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-store text-indigo-600"></i> Địa Điểm Đề Xuất Phù Hợp
+                    </h3>
+
+                    <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                        <!-- Toggle View Mode (List vs Map) -->
+                        <div class="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-semibold">
+                            <button id="btn-view-list" onclick="window.app.switchVenueView('list')" class="px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm">
+                                <i class="fa-solid fa-list mr-1"></i>Danh Sách
+                            </button>
+                            <button id="btn-view-map" onclick="window.app.switchVenueView('map')" class="px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600">
+                                <i class="fa-solid fa-map-marked-alt mr-1"></i>Bản Đồ (Map View)
+                            </button>
+                        </div>
+
+                        <!-- Button Thêm Địa Điểm Mới -->
+                        <button onclick="window.app.openAddVenueModal()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition">
+                            <i class="fa-solid fa-plus-circle"></i> Thêm Địa Điểm Mới
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Administrative & Category Filters -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 text-xs">
+                    <div>
+                        <label class="block font-semibold text-slate-600 mb-1"><i class="fa-solid fa-city text-indigo-500 mr-1"></i>Tỉnh / Thành Phố</label>
+                        <select id="filter-city" onchange="window.app.onCityFilterChange()" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white">
+                            <option value="all">Tất cả Tỉnh / Thành phố</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-600 mb-1"><i class="fa-solid fa-location-dot text-rose-500 mr-1"></i>Xã / Phường</label>
+                        <select id="filter-ward" onchange="window.app.applyVenueFilters()" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white">
+                            <option value="all">Tất cả Xã / Phường</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-600 mb-1"><i class="fa-solid fa-layer-group text-amber-500 mr-1"></i>Loại Hình</label>
+                        <select id="filter-category" onchange="window.app.applyVenueFilters()" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white">
+                            <option value="all">Tất cả Loại hình</option>
+                            <option value="cafe">Cà Phê / Trà Sữa</option>
+                            <option value="restaurant">Nhà Hàng / Quán Ăn</option>
+                            <option value="entertainment">Vui Chơi / Giải Trí</option>
+                            <option value="pub">Pub / Acoustic Bar</option>
+                        </select>
+                    </div>
                 </div>
             </div>
+
+            <!-- List View Container -->
+            <div id="venue-list-container" class="space-y-4">
+                <!-- Rendered by App -->
+            </div>
+
+            <!-- Map View Container (Leaflet) -->
+            <div id="venue-map-container" class="h-[460px] w-full rounded-xl border border-slate-200 shadow-sm hidden overflow-hidden z-0">
+                <!-- Leaflet Map rendered here -->
+            </div>
         </section>
+
+        <!-- MODAL: THÊM ĐỊA ĐIỂM MỚI -->
+        <div id="add-venue-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4 overflow-y-auto">
+            <div class="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-4 border border-slate-100 my-8">
+                <div class="flex justify-between items-center border-b pb-3">
+                    <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-map-pin text-indigo-600"></i> Thêm Địa Điểm Mới Vô CSDL
+                    </h3>
+                    <button onclick="window.app.closeAddVenueModal()" class="text-slate-400 hover:text-slate-600 text-lg">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <form id="form-add-venue" onsubmit="window.app.saveNewVenue(event)" class="space-y-4 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Tên Địa Điểm <span class="text-rose-500">*</span></label>
+                            <input type="text" id="new-venue-name" required placeholder="Ví dụ: Phúc Long Coffee & Tea" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Loại Hình <span class="text-rose-500">*</span></label>
+                            <select id="new-venue-category" required class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white">
+                                <option value="cafe">Cà Phê / Trà Sữa</option>
+                                <option value="restaurant">Nhà Hàng / Quán Ăn</option>
+                                <option value="entertainment">Vui Chơi / Giải Trí</option>
+                                <option value="pub">Pub / Acoustic Bar</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Mức Giá</label>
+                            <select id="new-venue-price" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white">
+                                <option value="$">$ (Bình dân)</option>
+                                <option value="$$" selected>$$ (Vừa phải)</option>
+                                <option value="$$$">$$$ (Cao cấp)</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Sức Chứa (Người)</label>
+                            <input type="number" id="new-venue-capacity" value="30" min="1" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Đánh Giá (1 - 5 ⭐)</label>
+                            <input type="number" id="new-venue-rating" value="4.5" min="1" max="5" step="0.1" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+
+                    <!-- Khung giờ phù hợp -->
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Khung Giờ Phù Hợp <span class="text-rose-500">*</span></label>
+                        <div class="flex flex-wrap gap-3 p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+                            <label class="inline-flex items-center gap-1.5"><input type="checkbox" name="time_tags" value="morning" checked class="rounded text-indigo-600"> Sáng (8h-12h)</label>
+                            <label class="inline-flex items-center gap-1.5"><input type="checkbox" name="time_tags" value="noon" checked class="rounded text-indigo-600"> Trưa (12h-14h)</label>
+                            <label class="inline-flex items-center gap-1.5"><input type="checkbox" name="time_tags" value="afternoon" checked class="rounded text-indigo-600"> Chiều (14h-18h)</label>
+                            <label class="inline-flex items-center gap-1.5"><input type="checkbox" name="time_tags" value="evening" checked class="rounded text-indigo-600"> Tối (18h-20h)</label>
+                        </div>
+                    </div>
+
+                    <!-- Hành chính 2 cấp -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Tỉnh / Thành Phố <span class="text-rose-500">*</span></label>
+                            <input type="text" id="new-venue-city" required value="TP. Hồ Chí Minh" placeholder="Ví dụ: TP. Hồ Chí Minh, TP. Hà Nội" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Xã / Phường / Thị Trấn <span class="text-rose-500">*</span></label>
+                            <input type="text" id="new-venue-ward" required placeholder="Ví dụ: Phường Bến Nghé" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Địa Chỉ Chi Tiết <span class="text-rose-500">*</span></label>
+                        <input type="text" id="new-venue-address" required placeholder="Ví dụ: 125 Lê Lợi, Phường Bến Nghé, TP. Hồ Chí Minh" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <!-- Tọa độ Lat / Lng -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Vĩ Độ (Lat)</label>
+                            <input type="number" step="any" id="new-venue-lat" placeholder="10.7769" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                        <div>
+                            <label class="block font-bold text-slate-700 mb-1">Kinh Độ (Lng)</label>
+                            <input type="number" step="any" id="new-venue-lng" placeholder="106.7009" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Thẻ / Tags (Phân cách bằng dấu phẩy)</label>
+                        <input type="text" id="new-venue-tags" placeholder="cà phê, yên tĩnh, máy lạnh" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Link Ảnh Minh Họa (Image URL)</label>
+                        <input type="url" id="new-venue-image" placeholder="https://images.unsplash.com/..." class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500">
+                    </div>
+
+                    <div class="pt-3 border-t flex justify-end gap-2">
+                        <button type="button" onclick="window.app.closeAddVenueModal()" class="px-4 py-2 border border-slate-300 text-slate-600 rounded-lg font-semibold hover:bg-slate-50 transition">Hủy</button>
+                        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition"><i class="fa-solid fa-save mr-1"></i> Lưu Địa Điểm</button>
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <!-- TAB 4: KẾ HOẠCH HOÀN CHỈNH -->
         <section id="tab-summary" class="tab-content hidden space-y-6">

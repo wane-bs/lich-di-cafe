@@ -13,7 +13,9 @@ class RecommenderEngine:
         group_size: int = 1,
         preferences: Optional[List[str]] = None,
         max_price: Optional[str] = None,
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        city: Optional[str] = None,
+        ward: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Lọc cứng (Hard Filter) và Phân điểm (Scoring) danh sách địa điểm.
@@ -34,6 +36,14 @@ class RecommenderEngine:
 
             # 3. Hard Filter: Category nếu được yêu cầu
             if category and category != "all" and venue.category != category:
+                continue
+
+            # 4. Hard Filter: City nếu được yêu cầu
+            if city and city != "all" and venue.city.lower() != city.lower():
+                continue
+
+            # 5. Hard Filter: Ward (Xã/Phường) nếu được yêu cầu
+            if ward and ward != "all" and venue.ward.lower() != ward.lower():
                 continue
 
             # --- SOFT FILTER & SCORING ---
@@ -64,6 +74,10 @@ class RecommenderEngine:
                     "price_range": venue.price_range,
                     "capacity": venue.capacity,
                     "address": venue.address,
+                    "city": venue.city,
+                    "ward": venue.ward,
+                    "lat": venue.lat,
+                    "lng": venue.lng,
                     "tags": venue.tags,
                     "rating": venue.rating,
                     "image_url": venue.image_url

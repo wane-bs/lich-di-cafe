@@ -16,7 +16,7 @@ def validate_venues_json(json_path: str):
         print("[ERROR] venues.json must be a JSON array of venue objects")
         sys.exit(1)
         
-    required_keys = ["id", "name", "category", "time_tags", "price_range", "capacity", "address", "tags", "rating"]
+    required_keys = ["id", "name", "category", "time_tags", "price_range", "capacity", "address", "city", "ward", "lat", "lng", "tags", "rating"]
     for idx, item in enumerate(data):
         for key in required_keys:
             if key not in item:
