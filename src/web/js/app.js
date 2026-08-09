@@ -516,75 +516,153 @@ window.app = {
         if (status) status.classList.add("hidden");
     },
 
-    parseGoogleMapsLink() {
+    async parseGoogleMapsLink() {
         const input = document.getElementById("new-venue-gmap-link");
         const status = document.getElementById("gmap-parse-status");
         if (!input || !input.value.trim()) return;
 
-        const url = input.value.trim();
-        let foundLat = null, foundLng = null, foundName = null;
+        let url = input.value.trim();
 
-        // 1. Parse @lat,lng
-        const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-        if (atMatch) {
-            foundLat = parseFloat(atMatch[1]);
-            foundLng = parseFloat(atMatch[2]);
+        if (status) {
+            status.classList.remove("hidden");
+            status.className = "text-[11px] text-indigo-600 font-semibold mt-1 flex items-center gap-1";
+            status.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-indigo-600"></i> Đang giải mã liên kết Google Maps và vị trí GPS...`;
         }
 
-        // 2. Parse q=lat,lng or query=lat,lng or ll=lat,lng
-        if (foundLat === null) {
-            const queryMatch = url.match(/[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/);
-            if (queryMatch) {
-                foundLat = parseFloat(queryMatch[1]);
-                foundLng = parseFloat(queryMatch[2]);
+        try {
+            // Giải mã link rút gọn (maps.app.goo.gl, goo.gl, bit.ly, tinyurl)
+            if (url.includes("maps.app.goo.gl") || url.includes("goo.gl") || url.includes("tinyurl.com") || url.includes("bit.ly")) {
+                try {
+                    const unshortenResp = await fetch(`https://unshorten.me/json/${encodeURIComponent(url)}`);
+                    if (unshortenResp.ok) {
+                        const data = await unshortenResp.json();
+                        if (data && data.resolved_url) {
+                            let resolved = decodeURIComponent(data.resolved_url);
+                            if (resolved.includes("continue=")) {
+                                const matchContinue = resolved.match(/continue=([^&]+)/);
+                                if (matchContinue) {
+                                    resolved = decodeURIComponent(matchContinue[1]);
+                                }
+                            }
+                            url = resolved;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("[App] Unshorten API error, attempting direct regex on link:", err);
+                }
             }
-        }
 
-        // 3. Parse !3dLat!4dLng
-        if (foundLat === null) {
+            let foundLat = null, foundLng = null, foundName = null;
+
+            // 1. Parse !3dLat!4dLng (Exact venue location)
             const dMatch = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
             if (dMatch) {
                 foundLat = parseFloat(dMatch[1]);
                 foundLng = parseFloat(dMatch[2]);
             }
-        }
 
-        // 4. Parse Place Name from URL (/place/Name/ or /search/Name/)
-        const placeMatch = url.match(/\/(?:place|search)\/([^\/@?#]+)/);
-        if (placeMatch) {
-            const rawName = placeMatch[1];
-            try {
-                foundName = decodeURIComponent(rawName.replace(/\+/g, ' ')).trim();
-            } catch (e) {
-                foundName = rawName.replace(/\+/g, ' ').trim();
+            // 2. Parse @lat,lng (Viewport center)
+            if (foundLat === null) {
+                const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+                if (atMatch) {
+                    foundLat = parseFloat(atMatch[1]);
+                    foundLng = parseFloat(atMatch[2]);
+                }
             }
-        }
 
-        const autoFilled = [];
-        if (foundName) {
-            const nameField = document.getElementById("new-venue-name");
-            if (nameField) {
-                nameField.value = foundName;
-                autoFilled.push(`Tên: "${foundName}"`);
+            // 3. Parse q=lat,lng or query=lat,lng
+            if (foundLat === null) {
+                const queryMatch = url.match(/[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/);
+                if (queryMatch) {
+                    foundLat = parseFloat(queryMatch[1]);
+                    foundLng = parseFloat(queryMatch[2]);
+                }
             }
-        }
 
-        if (foundLat !== null && foundLng !== null) {
-            const latField = document.getElementById("new-venue-lat");
-            const lngField = document.getElementById("new-venue-lng");
-            if (latField) latField.value = foundLat;
-            if (lngField) lngField.value = foundLng;
-            autoFilled.push(`Tọa độ: ${foundLat}, ${foundLng}`);
-        }
+            // 4. Parse Place Name from URL (/place/Name/ or /search/Name/)
+            const placeMatch = url.match(/\/(?:place|search)\/([^\/@?#]+)/);
+            if (placeMatch) {
+                const rawName = placeMatch[1];
+                try {
+                    foundName = decodeURIComponent(rawName.replace(/\+/g, ' ')).trim();
+                } catch (e) {
+                    foundName = rawName.replace(/\+/g, ' ').trim();
+                }
+            }
 
-        if (status) {
-            status.classList.remove("hidden");
-            if (autoFilled.length > 0) {
-                status.className = "text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-1";
-                status.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600"></i> Đã tự động điền: ${autoFilled.join(" | ")}`;
-            } else {
-                status.className = "text-[11px] text-amber-600 font-semibold mt-1 flex items-center gap-1";
-                status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-amber-600"></i> Chưa nhận diện được tọa độ từ link này. Bạn có thể tự điền Lat/Lng bên dưới.`;
+            const autoFilled = [];
+
+            // Reverse Geocoding với OpenStreetMap Nominatim nếu có tọa độ
+            let foundWard = null, foundCity = null, foundAddress = null;
+            if (foundLat !== null && foundLng !== null) {
+                try {
+                    const nomResp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${foundLat}&lon=${foundLng}`, {
+                        headers: { 'Accept-Language': 'vi' }
+                    });
+                    if (nomResp.ok) {
+                        const nomData = await nomResp.json();
+                        if (nomData && nomData.address) {
+                            const addr = nomData.address;
+                            foundWard = addr.suburb || addr.quarter || addr.neighbourhood || addr.village || addr.ward || null;
+                            foundCity = addr.city || addr.state || addr.province || "TP. Hồ Chí Minh";
+                            foundAddress = nomData.display_name || null;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("[App] Reverse geocoding error:", err);
+                }
+            }
+
+            if (foundName) {
+                const nameField = document.getElementById("new-venue-name");
+                if (nameField) {
+                    nameField.value = foundName;
+                    autoFilled.push(`Tên: "${foundName}"`);
+                }
+            }
+
+            if (foundLat !== null && foundLng !== null) {
+                const latField = document.getElementById("new-venue-lat");
+                const lngField = document.getElementById("new-venue-lng");
+                if (latField) latField.value = foundLat;
+                if (lngField) lngField.value = foundLng;
+                autoFilled.push(`Tọa độ: ${foundLat.toFixed(5)}, ${foundLng.toFixed(5)}`);
+            }
+
+            if (foundWard) {
+                const wardField = document.getElementById("new-venue-ward");
+                if (wardField) {
+                    wardField.value = foundWard;
+                    autoFilled.push(`Phường: ${foundWard}`);
+                }
+            }
+
+            if (foundCity) {
+                const cityField = document.getElementById("new-venue-city");
+                if (cityField) cityField.value = foundCity;
+            }
+
+            if (foundAddress) {
+                const addrField = document.getElementById("new-venue-address");
+                if (addrField && (!addrField.value || addrField.value.trim() === "")) {
+                    addrField.value = foundAddress;
+                }
+            }
+
+            if (status) {
+                if (autoFilled.length > 0) {
+                    status.className = "text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-1";
+                    status.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600"></i> Đã trích xuất thành công: ${autoFilled.join(" | ")}`;
+                } else {
+                    status.className = "text-[11px] text-amber-600 font-semibold mt-1 flex items-center gap-1";
+                    status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-amber-600"></i> Không tìm thấy vị trí từ liên kết. Hãy thử tự điền bên dưới.`;
+                }
+            }
+        } catch (err) {
+            console.error("[App] Lỗi trích xuất Google Maps:", err);
+            if (status) {
+                status.className = "text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1";
+                status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-rose-600"></i> Có lỗi xảy ra khi giải mã liên kết. Vui lòng kiểm tra lại đường dẫn.`;
             }
         }
     },
