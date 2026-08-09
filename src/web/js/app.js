@@ -512,6 +512,81 @@ window.app = {
     closeAddVenueModal() {
         const modal = document.getElementById("add-venue-modal");
         if (modal) modal.classList.add("hidden");
+        const status = document.getElementById("gmap-parse-status");
+        if (status) status.classList.add("hidden");
+    },
+
+    parseGoogleMapsLink() {
+        const input = document.getElementById("new-venue-gmap-link");
+        const status = document.getElementById("gmap-parse-status");
+        if (!input || !input.value.trim()) return;
+
+        const url = input.value.trim();
+        let foundLat = null, foundLng = null, foundName = null;
+
+        // 1. Parse @lat,lng
+        const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (atMatch) {
+            foundLat = parseFloat(atMatch[1]);
+            foundLng = parseFloat(atMatch[2]);
+        }
+
+        // 2. Parse q=lat,lng or query=lat,lng or ll=lat,lng
+        if (foundLat === null) {
+            const queryMatch = url.match(/[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/);
+            if (queryMatch) {
+                foundLat = parseFloat(queryMatch[1]);
+                foundLng = parseFloat(queryMatch[2]);
+            }
+        }
+
+        // 3. Parse !3dLat!4dLng
+        if (foundLat === null) {
+            const dMatch = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+            if (dMatch) {
+                foundLat = parseFloat(dMatch[1]);
+                foundLng = parseFloat(dMatch[2]);
+            }
+        }
+
+        // 4. Parse Place Name from URL (/place/Name/ or /search/Name/)
+        const placeMatch = url.match(/\/(?:place|search)\/([^\/@?#]+)/);
+        if (placeMatch) {
+            const rawName = placeMatch[1];
+            try {
+                foundName = decodeURIComponent(rawName.replace(/\+/g, ' ')).trim();
+            } catch (e) {
+                foundName = rawName.replace(/\+/g, ' ').trim();
+            }
+        }
+
+        const autoFilled = [];
+        if (foundName) {
+            const nameField = document.getElementById("new-venue-name");
+            if (nameField) {
+                nameField.value = foundName;
+                autoFilled.push(`Tên: "${foundName}"`);
+            }
+        }
+
+        if (foundLat !== null && foundLng !== null) {
+            const latField = document.getElementById("new-venue-lat");
+            const lngField = document.getElementById("new-venue-lng");
+            if (latField) latField.value = foundLat;
+            if (lngField) lngField.value = foundLng;
+            autoFilled.push(`Tọa độ: ${foundLat}, ${foundLng}`);
+        }
+
+        if (status) {
+            status.classList.remove("hidden");
+            if (autoFilled.length > 0) {
+                status.className = "text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-1";
+                status.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600"></i> Đã tự động điền: ${autoFilled.join(" | ")}`;
+            } else {
+                status.className = "text-[11px] text-amber-600 font-semibold mt-1 flex items-center gap-1";
+                status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-amber-600"></i> Chưa nhận diện được tọa độ từ link này. Bạn có thể tự điền Lat/Lng bên dưới.`;
+            }
+        }
     },
 
     saveNewVenue(e) {
