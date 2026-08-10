@@ -40,6 +40,16 @@ Tệp tài liệu này ghi nhận toàn bộ ngữ cảnh (context), quyết đ�
     - **Variable name**: `DB` *(Viết hoa 2 chữ cái)*
     - **D1 Database**: Chọn `lich-di-cafe-db`
 
+### 🛑 4. Quy chuẩn Tham số Frontend JS Components (`app.js` & `matrix-ui.js`)
+- **Lưu ý**: Khi kết nối giữa `app.js` và `matrix-ui.js`:
+  - `MatrixUI.renderInputGrid(containerId, currentMatrix, onSlotToggle)`:
+    - `containerId`: Phải là chuỗi ID HTML Element (ví dụ: `"input-grid-container"`), **không được truyền trực tiếp mảng `this.members`**.
+    - `currentMatrix`: Phải là mảng ma trận 7x6 (`activeMember.matrix`), **không được truyền chỉ số số nguyên `activeMemberIndex`**.
+  - `MatrixUI.renderHeatmap(containerId, aggregateMatrix, totalMembers, onSelectSlot)`:
+    - `containerId`: Phải là chuỗi ID HTML Element (ví dụ: `"heatmap-container"`).
+    - `aggregateMatrix` & `totalMembers`: Phải truyền tách biệt ma trận tổng hợp và tổng số thành viên.
+
+
 ---
 
 ## 🛠️ 4. Quy Trình Khởi Tạo & Deploy Chi Tiết Từ Đầu

@@ -366,9 +366,14 @@ window.app = {
 
         // Render Matrix Input Grid
         if (window.MatrixUI) {
+            const activeMember = this.members[this.activeMemberIndex];
+            const currentMatrix = (activeMember && activeMember.matrix)
+                ? activeMember.matrix
+                : Array(7).fill(0).map(() => Array(6).fill(0));
+
             window.MatrixUI.renderInputGrid(
-                this.members,
-                this.activeMemberIndex,
+                "input-grid-container",
+                currentMatrix,
                 (d, s) => this.toggleSlot(d, s)
             );
         }
@@ -383,11 +388,172 @@ window.app = {
 
         // Render Heatmap
         if (window.MatrixUI) {
-            window.MatrixUI.renderHeatmap(analysis, (slot) => this.selectSlotForVenues(slot));
+            window.MatrixUI.renderHeatmap(
+                "heatmap-container",
+                analysis.aggregate_matrix || Array(7).fill(0).map(() => Array(6).fill(0)),
+                this.members.length,
+                (slot) => this.selectSlotForVenues(slot)
+            );
         }
 
         this.renderTopSlots(analysis);
         this.applyVenueFilters();
+    },
+
+    async loadSampleData() {
+        if (this.currentRoom && this.currentRoom.id && this.currentRoom.id !== "offline_sample") {
+            await this.loadSampleDataForRoom(this.currentRoom.id);
+        } else {
+            this.loadSampleDataOffline();
+            this.updateUI();
+        }
+    },
+
+    selectSlotForRecommendation(dayIdx, slotIdx) {
+        this.selectSlotForVenues({ day_index: dayIdx, slot_index: slotIdx });
+    },
+
+    openAddVenueModal() {
+        const modal = document.getElementById("add-venue-modal");
+        if (modal) modal.classList.remove("hidden");
+    },
+
+    closeAddVenueModal() {
+        const modal = document.getElementById("add-venue-modal");
+        if (modal) modal.classList.add("hidden");
+    },
+
+    parseGoogleMapsLink() {
+        const input = document.getElementById("new-venue-gmap-link");
+        const statusEl = document.getElementById("gmap-parse-status");
+        if (!input) return;
+        const url = input.value.trim();
+        if (!url) return;
+
+        // Regex extract @lat,lng from Google Maps link
+        const match = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+        if (match) {
+            const lat = parseFloat(match[1]);
+            const lng = parseFloat(match[2]);
+            const latInput = document.getElementById("new-venue-lat");
+            const lngInput = document.getElementById("new-venue-lng");
+            if (latInput) latInput.value = lat;
+            if (lngInput) lngInput.value = lng;
+
+            if (statusEl) {
+                statusEl.textContent = `✓ Trích xuất tọa độ thành công: Lat ${lat}, Lng ${lng}`;
+                statusEl.className = "text-[11px] text-emerald-600 font-bold mt-1";
+            }
+        } else {
+            if (statusEl) {
+                statusEl.textContent = "Không tìm thấy tọa độ GPS trong link. Vui lòng điền thủ công.";
+                statusEl.className = "text-[11px] text-amber-600 font-semibold mt-1";
+            }
+        }
+    },
+
+    saveNewVenue(event) {
+        if (event) event.preventDefault();
+        const name = document.getElementById("new-venue-name")?.value.trim();
+        const category = document.getElementById("new-venue-category")?.value || "cafe";
+        const price_range = document.getElementById("new-venue-price")?.value || "$$";
+        const capacity = parseInt(document.getElementById("new-venue-capacity")?.value || "30");
+        const rating = parseFloat(document.getElementById("new-venue-rating")?.value || "4.5");
+        const city = document.getElementById("new-venue-city")?.value.trim() || "TP. Hồ Chí Minh";
+        const ward = document.getElementById("new-venue-ward")?.value.trim() || "Phường Bến Nghé";
+        const address = document.getElementById("new-venue-address")?.value.trim() || "";
+        const lat = parseFloat(document.getElementById("new-venue-lat")?.value || "0") || null;
+        const lng = parseFloat(document.getElementById("new-venue-lng")?.value || "0") || null;
+        const tagsStr = document.getElementById("new-venue-tags")?.value || "";
+        const image_url = document.getElementById("new-venue-image")?.value.trim() || "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500";
+
+        const timeCheckboxes = document.querySelectorAll('input[name="time_tags"]:checked');
+        const time_tags = Array.from(timeCheckboxes).map(cb => cb.value);
+
+        if (!name || !address) {
+            alert("Vui lòng điền đầy đủ Tên và Địa chỉ!");
+            return;
+        }
+
+        const newVenue = {
+            id: "v_" + Date.now(),
+            name,
+            category,
+            time_tags: time_tags.length > 0 ? time_tags : ["morning", "afternoon"],
+            price_range,
+            capacity,
+            address,
+            city,
+            ward,
+            lat,
+            lng,
+            rating,
+            tags: tagsStr.split(",").map(t => t.trim()).filter(Boolean),
+            image_url
+        };
+
+        this.venues.unshift(newVenue);
+        this.closeAddVenueModal();
+        this.populateCityFilter();
+        alert(`Đã thêm địa điểm "${name}" thành công!`);
+    },
+
+    switchVenueView(mode) {
+        this.currentVenueView = mode;
+        const listBtn = document.getElementById("btn-view-list");
+        const mapBtn = document.getElementById("btn-view-map");
+        const listContainer = document.getElementById("venue-list-container");
+        const mapContainer = document.getElementById("venue-map-container");
+
+        if (mode === "map") {
+            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
+            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm font-bold";
+            if (listContainer) listContainer.classList.add("hidden");
+            if (mapContainer) mapContainer.classList.remove("hidden");
+            this.initLeafletMap();
+        } else {
+            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm font-bold";
+            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
+            if (listContainer) listContainer.classList.remove("hidden");
+            if (mapContainer) mapContainer.classList.add("hidden");
+        }
+    },
+
+    initLeafletMap() {
+        if (!window.L) return;
+        const container = document.getElementById("venue-map-container");
+        if (!container) return;
+
+        if (!this.leafletMap) {
+            this.leafletMap = window.L.map("venue-map-container").setView([10.7769, 106.7009], 13);
+            window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                attribution: "© OpenStreetMap contributors"
+            }).addTo(this.leafletMap);
+        }
+
+        if (this.markersLayer) {
+            this.markersLayer.clearLayers();
+        } else {
+            this.markersLayer = window.L.layerGroup().addTo(this.leafletMap);
+        }
+
+        this.venues.forEach(v => {
+            if (v.lat && v.lng) {
+                const marker = window.L.marker([v.lat, v.lng]);
+                marker.bindPopup(`
+                    <div class="text-xs space-y-1">
+                        <strong class="text-sm font-bold text-slate-900">${v.name}</strong>
+                        <p class="text-slate-500">${v.address}</p>
+                        <span class="text-indigo-600 font-bold">⭐ ${v.rating} • ${v.price_range}</span>
+                    </div>
+                `);
+                this.markersLayer.addLayer(marker);
+            }
+        });
+
+        setTimeout(() => {
+            if (this.leafletMap) this.leafletMap.invalidateSize();
+        }, 200);
     },
 
     analyzeScheduleLocal() {
