@@ -5,7 +5,7 @@ pages_build_output_dir = "./src/web"
 [[d1_databases]]
 binding = "DB"
 database_name = "lich-di-cafe-db"
-database_id = "local-lich-di-cafe-db"
+database_id = "4ebd8c90-b0cc-4f9b-afb1-c82576de3560"
 migrations_dir = "migrations"
 
 [build]
