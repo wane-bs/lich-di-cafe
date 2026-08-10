@@ -1,0 +1,13 @@
+name = "lich-di-cafe"
+compatibility_date = "2026-08-10"
+pages_build_output_dir = "./src/web"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lich-di-cafe-db"
+database_id = "local-lich-di-cafe-db"
+migrations_dir = "migrations"
+
+[build]
+command = "python scripts/build.py"
+

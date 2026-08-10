@@ -31,5 +31,9 @@ config.json
 .DS_Store
 Thumbs.db
 
+# Node dependencies & Wrangler build cache
+node_modules/
+.wrangler/
+
 # Logs
 *.log

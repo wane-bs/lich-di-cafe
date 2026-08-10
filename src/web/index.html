@@ -13,9 +13,6 @@
     <!-- Leaflet OpenStreetMap CDN -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- Pyodide WebAssembly Python Runtime Engine -->
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.1/full/pyodide.js"></script>
 </head>
 <body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col">
 
@@ -27,17 +24,18 @@
                     <i class="fa-solid fa-calendar-days text-xl text-yellow-300"></i>
                 </div>
                 <div>
-                    <h1 class="font-bold text-lg leading-tight">SmartHangout Engine</h1>
-                    <p class="text-xs text-indigo-200">Hệ thống tối ưu thời gian & gợi ý địa điểm đi chơi nhóm</p>
+                    <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                        Hangout Planner
+                        <span id="current-group-badge" class="text-xs bg-amber-400 text-slate-900 font-extrabold px-2 py-0.5 rounded-full hidden"></span>
+                    </h1>
+                    <p class="text-xs text-indigo-200">Full-Stack Cloudflare Pages App • Edge D1 Database</p>
                 </div>
             </div>
             
-            <div class="flex items-center gap-3">
-                <div id="pyodide-status" class="hidden sm:block">
-                    <span class="text-xs bg-indigo-800 text-indigo-300 px-2.5 py-1 rounded-full border border-indigo-700">
-                        <i class="fa-solid fa-circle-notch fa-spin mr-1"></i>Loading Python Engine...
-                    </span>
-                </div>
+            <div class="flex items-center gap-2">
+                <button onclick="window.app.openCreateRoomModal()" class="bg-amber-400 hover:bg-amber-500 text-slate-900 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow transition">
+                    <i class="fa-solid fa-plus-circle"></i> Tạo Nhóm Mới
+                </button>
                 <div id="quick-stats" class="text-xs bg-indigo-800/80 px-3 py-1.5 rounded-full border border-indigo-700 flex items-center gap-3">
                     <span><i class="fa-solid fa-users text-indigo-300 mr-1"></i><strong id="stat-members-count">0</strong> người</span>
                     <span class="text-indigo-400">|</span>
@@ -341,6 +339,43 @@
                     <div class="pt-3 border-t flex justify-end gap-2">
                         <button type="button" onclick="window.app.closeAddVenueModal()" class="px-4 py-2 border border-slate-300 text-slate-600 rounded-lg font-semibold hover:bg-slate-50 transition">Hủy</button>
                         <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition"><i class="fa-solid fa-save mr-1"></i> Lưu Địa Điểm</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- MODAL: TẠO PHIÊN NHÓM MỚI -->
+        <div id="create-room-modal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center hidden p-4 overflow-y-auto">
+            <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-100">
+                <div class="flex justify-between items-center border-b pb-3">
+                    <h3 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                        <i class="fa-solid fa-users-rectangle text-indigo-600"></i> Khởi Tạo Phiên Nhóm Mới
+                    </h3>
+                    <button onclick="window.app.closeCreateRoomModal()" class="text-slate-400 hover:text-slate-600 text-lg">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+
+                <form onsubmit="window.app.createNewRoom(event)" class="space-y-4 text-xs">
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Tên Nhóm / Tên Sự Kiện <span class="text-rose-500">*</span></label>
+                        <input type="text" id="new-room-group-name" required placeholder="Ví dụ: Hội Cà Phê Cuối Tuần, Team Tech Sync..." class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm">
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">Ngưỡng Chốt Lịch (% Tối Thiểu Thành Viên Rảnh)</label>
+                        <select id="new-room-threshold" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 bg-white text-xs">
+                            <option value="1.0">100% (Tất cả thành viên phải rảnh)</option>
+                            <option value="0.8" selected>80% (Số đông rảnh)</option>
+                            <option value="0.6">60% (Trên một nửa rảnh)</option>
+                        </select>
+                    </div>
+
+                    <div class="pt-3 border-t flex justify-end gap-2">
+                        <button type="button" onclick="window.app.closeCreateRoomModal()" class="px-4 py-2 border border-slate-300 text-slate-600 rounded-lg font-semibold hover:bg-slate-50 transition">Hủy</button>
+                        <button type="submit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-check"></i> Tạo Nhóm & Cấp Link
+                        </button>
                     </div>
                 </form>
             </div>

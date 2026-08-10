@@ -1,0 +1,21 @@
+{
+  "name": "lich-di-cafe",
+  "version": "2.0.0",
+  "description": "Hangout Planner - Cloudflare Pages Full-Stack Web App",
+  "main": "functions/api/[[path]].ts",
+  "scripts": {
+    "test": "node --import tsx --test tests/*.test.ts && python -m unittest discover -s tests",
+    "test:ts": "node --import tsx --test tests/*.test.ts",
+    "build": "python scripts/build.py",
+    "dev": "wrangler pages dev src/web"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250204.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "wrangler": "^3.107.2"
+  }
+}

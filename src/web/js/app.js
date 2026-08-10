@@ -1,8 +1,9 @@
 /**
- * Main Application Logic & URL Hash State Manager
+ * Main Application Logic for Hangout Planner (Cloudflare Pages REST API + D1 Edge Database)
  */
 
 window.app = {
+    currentRoom: null, // { id, group_name, threshold_pct }
     members: [],
     activeMemberIndex: 0,
     venues: [],
@@ -11,65 +12,178 @@ window.app = {
     leafletMap: null,
     markersLayer: null,
     currentVenueView: 'list',
+    analysisResult: null,
 
     async init() {
-        console.log("[App] Initializing Hangout Planner...");
+        console.log("[App] Initializing Hangout Planner with Cloudflare REST API...");
 
-        // Nạp cơ sở dữ liệu địa điểm venues.json
+        // Load Venues
         await this.loadVenues();
 
-        // Nạp Pyodide WASM Engine
-        if (window.PyodideBridge) {
-            window.PyodideBridge.init();
+        // Check if room param exists in URL (?room=xxx or hash #room=xxx)
+        const urlParams = new URLSearchParams(window.location.search);
+        let roomId = urlParams.get("room");
+        if (!roomId && window.location.hash) {
+            const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+            roomId = hashParams.get("room");
         }
 
-        // Kiểm tra URL State Hash nếu có link được chia sẻ
-        const loadedFromHash = this.loadFromUrlHash();
-
-        if (!loadedFromHash || this.members.length === 0) {
-            // Thêm dữ liệu mẫu 4 người mặc định nếu chưa có
-            this.loadSampleData();
+        if (roomId) {
+            await this.loadRoom(roomId);
+        } else {
+            // Auto create a sample default session room if none provided
+            await this.createDefaultSampleRoom();
         }
 
         this.updateUI();
     },
 
+    async createDefaultSampleRoom() {
+        try {
+            const resp = await fetch("/api/rooms", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    group_name: "Hội Cà Phê Mẫu",
+                    threshold_pct: 0.8
+                })
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                this.currentRoom = data.room;
+                // Add sample members to D1
+                await this.loadSampleDataForRoom(data.room.id);
+            }
+        } catch (e) {
+            console.warn("[App] Could not create default room via API, running offline fallback:", e);
+            this.currentRoom = { id: "offline_sample", group_name: "Hội Cà Phê Mẫu (Offline)", threshold_pct: 0.8 };
+            this.loadSampleDataOffline();
+        }
+    },
+
+    async loadSampleDataForRoom(roomId) {
+        const createEmpty = () => Array(7).fill(0).map(() => Array(6).fill(0));
+        
+        const m1 = createEmpty(); m1[0][0]=1; m1[0][1]=1; m1[5][3]=1; m1[5][4]=1; m1[6][3]=1;
+        const m2 = createEmpty(); m2[0][0]=1; m2[0][1]=1; m2[5][3]=1; m2[5][4]=1; m2[6][4]=1;
+        const m3 = createEmpty(); m3[0][0]=1; m3[0][1]=0; m3[5][3]=1; m3[5][4]=1; m3[6][3]=1;
+
+        const sampleMembers = [
+            { name: "Trưởng Nhóm Híu", matrix: m1 },
+            { name: "Minh Anh", matrix: m2 },
+            { name: "Đức Tuấn", matrix: m3 }
+        ];
+
+        for (const m of sampleMembers) {
+            await fetch(`/api/rooms/${roomId}/members`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(m)
+            });
+        }
+
+        await this.loadRoom(roomId);
+    },
+
+    loadSampleDataOffline() {
+        const createEmpty = () => Array(7).fill(0).map(() => Array(6).fill(0));
+        const m1 = createEmpty(); m1[0][0]=1; m1[0][1]=1; m1[5][3]=1; m1[5][4]=1; m1[6][3]=1;
+        const m2 = createEmpty(); m2[0][0]=1; m2[0][1]=1; m2[5][3]=1; m2[5][4]=1; m2[6][4]=1;
+        
+        this.members = [
+            { id: "m1", name: "Trưởng Nhóm Híu", matrix: m1 },
+            { id: "m2", name: "Minh Anh", matrix: m2 }
+        ];
+        this.activeMemberIndex = 0;
+    },
+
+    async loadRoom(roomId) {
+        try {
+            const resp = await fetch(`/api/rooms/${roomId}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                this.currentRoom = data.room;
+                this.members = data.members || [];
+                this.analysisResult = data.analysis;
+                
+                // Update URL query string without reloading page
+                const newUrl = `${window.location.pathname}?room=${roomId}`;
+                window.history.replaceState({ path: newUrl }, '', newUrl);
+
+                if (this.activeMemberIndex >= this.members.length) {
+                    this.activeMemberIndex = Math.max(0, this.members.length - 1);
+                }
+                this.updateUI();
+                console.log(`[App] Successfully loaded room ${roomId}: ${this.currentRoom.group_name}`);
+            } else {
+                alert("Không tìm thấy thông tin phòng! Đang khởi tạo phòng mới...");
+                await this.createDefaultSampleRoom();
+            }
+        } catch (e) {
+            console.error("[App] Failed to load room:", e);
+        }
+    },
+
+    openCreateRoomModal() {
+        document.getElementById("create-room-modal").classList.remove("hidden");
+    },
+
+    closeCreateRoomModal() {
+        document.getElementById("create-room-modal").classList.add("hidden");
+    },
+
+    async createNewRoom(event) {
+        event.preventDefault();
+        const groupNameInput = document.getElementById("new-room-group-name");
+        const thresholdSelect = document.getElementById("new-room-threshold");
+        const groupName = groupNameInput.value.trim();
+        const thresholdPct = parseFloat(thresholdSelect.value) || 0.8;
+
+        if (!groupName) return;
+
+        try {
+            const resp = await fetch("/api/rooms", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    group_name: groupName,
+                    threshold_pct: thresholdPct
+                })
+            });
+
+            if (resp.ok) {
+                const data = await resp.json();
+                this.closeCreateRoomModal();
+                groupNameInput.value = "";
+                await this.loadRoom(data.room.id);
+                this.copyShareLink();
+            } else {
+                alert("Lỗi tạo phòng mới. Vui lòng thử lại!");
+            }
+        } catch (e) {
+            console.error("[App] Failed creating new room:", e);
+            alert("Lỗi kết nối Server API.");
+        }
+    },
+
     async loadVenues() {
         try {
-            const resp = await fetch('data/venues.json');
-            let baseVenues = [];
+            const resp = await fetch('/api/venues');
             if (resp.ok) {
-                baseVenues = await resp.json();
+                const data = await resp.json();
+                if (data.venues && data.venues.length > 0) {
+                    this.venues = data.venues;
+                } else {
+                    this.venues = this.getFallbackVenues();
+                }
             } else {
-                baseVenues = this.getFallbackVenues();
+                this.venues = this.getFallbackVenues();
             }
-
-            const customVenues = this.getCustomVenues();
-            this.venues = [...baseVenues, ...customVenues];
-            console.log(`[App] Loaded ${this.venues.length} venues (${baseVenues.length} base, ${customVenues.length} custom).`);
         } catch (e) {
-            console.warn("[App] Error loading venues.json, using fallback:", e);
-            const customVenues = this.getCustomVenues();
-            this.venues = [...this.getFallbackVenues(), ...customVenues];
+            console.warn("[App] Could not fetch venues from API, using fallback:", e);
+            this.venues = this.getFallbackVenues();
         }
-
         this.populateCityFilter();
-    },
-
-    getCustomVenues() {
-        try {
-            const saved = localStorage.getItem('custom_venues');
-            return saved ? JSON.parse(saved) : [];
-        } catch (e) {
-            console.error("[App] Failed parsing custom venues from localStorage", e);
-            return [];
-        }
-    },
-
-    saveCustomVenue(venue) {
-        const custom = this.getCustomVenues();
-        custom.push(venue);
-        localStorage.setItem('custom_venues', JSON.stringify(custom));
     },
 
     getFallbackVenues() {
@@ -125,47 +239,57 @@ window.app = {
         ];
     },
 
-    loadSampleData() {
-        const createEmpty = () => Array(7).fill(0).map(() => Array(6).fill(0));
-        
-        const m1 = createEmpty(); m1[0][0]=1; m1[0][1]=1; m1[5][3]=1; m1[5][4]=1; m1[6][3]=1;
-        const m2 = createEmpty(); m2[0][0]=1; m2[0][1]=1; m2[5][3]=1; m2[5][4]=1; m2[6][4]=1;
-        const m3 = createEmpty(); m3[0][0]=1; m3[0][1]=0; m3[5][3]=1; m3[5][4]=1; m3[6][3]=1;
-        const m4 = createEmpty(); m4[0][0]=1; m4[0][1]=1; m4[5][3]=1; m4[5][4]=0; m4[6][3]=1;
-
-        this.members = [
-            { id: "m1", name: "Trưởng Nhóm Híu", matrix: m1 },
-            { id: "m2", name: "Minh Anh", matrix: m2 },
-            { id: "m3", name: "Đức Tuấn", matrix: m3 },
-            { id: "m4", name: "Thu Trang", matrix: m4 }
-        ];
-        this.activeMemberIndex = 0;
-        this.updateUI();
-    },
-
-    addMember() {
+    async addMember() {
         const input = document.getElementById("input-member-name");
         const name = input.value.trim();
         if (!name) return;
 
-        const newMember = {
-            id: "m_" + Date.now(),
-            name: name,
-            matrix: Array(7).fill(0).map(() => Array(6).fill(0))
-        };
+        const newMatrix = Array(7).fill(0).map(() => Array(6).fill(0));
 
-        this.members.push(newMember);
-        this.activeMemberIndex = this.members.length - 1;
-        input.value = "";
-        this.updateUI();
+        if (this.currentRoom && this.currentRoom.id) {
+            try {
+                const resp = await fetch(`/api/rooms/${this.currentRoom.id}/members`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name, matrix: newMatrix })
+                });
+
+                if (resp.ok) {
+                    input.value = "";
+                    await this.loadRoom(this.currentRoom.id);
+                    this.activeMemberIndex = this.members.length - 1;
+                }
+            } catch (e) {
+                console.error("[App] Failed adding member via API:", e);
+            }
+        } else {
+            this.members.push({ id: "m_" + Date.now(), name, matrix: newMatrix });
+            this.activeMemberIndex = this.members.length - 1;
+            input.value = "";
+            this.updateUI();
+        }
     },
 
-    removeMember(index) {
-        this.members.splice(index, 1);
-        if (this.activeMemberIndex >= this.members.length) {
-            this.activeMemberIndex = Math.max(0, this.members.length - 1);
+    async removeMember(index) {
+        const member = this.members[index];
+        if (!member) return;
+
+        if (this.currentRoom && this.currentRoom.id && member.id) {
+            try {
+                await fetch(`/api/rooms/${this.currentRoom.id}/members/${member.id}`, {
+                    method: "DELETE"
+                });
+                await this.loadRoom(this.currentRoom.id);
+            } catch (e) {
+                console.error("[App] Failed deleting member via API:", e);
+            }
+        } else {
+            this.members.splice(index, 1);
+            if (this.activeMemberIndex >= this.members.length) {
+                this.activeMemberIndex = Math.max(0, this.members.length - 1);
+            }
+            this.updateUI();
         }
-        this.updateUI();
     },
 
     selectMember(index) {
@@ -173,664 +297,287 @@ window.app = {
         this.updateUI();
     },
 
-    toggleSlot(dayIdx, slotIdx) {
+    async toggleSlot(dayIdx, slotIdx) {
         if (this.members.length === 0) return;
-        const currentVal = this.members[this.activeMemberIndex].matrix[dayIdx][slotIdx];
-        this.members[this.activeMemberIndex].matrix[dayIdx][slotIdx] = currentVal === 1 ? 0 : 1;
-        this.updateUI();
+        const currentMember = this.members[this.activeMemberIndex];
+        const currentVal = currentMember.matrix[dayIdx][slotIdx];
+        currentMember.matrix[dayIdx][slotIdx] = currentVal === 1 ? 0 : 1;
+
+        // Auto save to API
+        if (this.currentRoom && this.currentRoom.id) {
+            try {
+                await fetch(`/api/rooms/${this.currentRoom.id}/members`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        member_id: currentMember.id,
+                        name: currentMember.name,
+                        matrix: currentMember.matrix
+                    })
+                });
+                await this.loadRoom(this.currentRoom.id);
+            } catch (e) {
+                console.error("[App] Error saving slot update:", e);
+                this.updateUI();
+            }
+        } else {
+            this.updateUI();
+        }
     },
 
-    analyzeSchedule() {
-        // Ưu tiên dùng Python Pyodide Engine nếu khả dụng
-        if (window.PyodideBridge && window.PyodideBridge.isReady) {
-            const pyResult = window.PyodideBridge.analyzeSchedule(this.members);
-            if (pyResult) return pyResult;
+    copyShareLink() {
+        let shareUrl = window.location.href;
+        if (this.currentRoom && this.currentRoom.id) {
+            shareUrl = `${window.location.origin}${window.location.pathname}?room=${this.currentRoom.id}`;
+        }
+        navigator.clipboard.writeText(shareUrl).then(() => {
+            alert(`Đã sao chép Link phiên nhóm:\n${shareUrl}`);
+        }).catch(err => {
+            console.error("Could not copy text: ", err);
+        });
+    },
+
+    switchTab(tabId) {
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.querySelectorAll('.tab-btn').forEach(el => {
+            el.classList.remove('border-indigo-600', 'text-indigo-600');
+            el.classList.add('border-transparent', 'text-slate-500');
+        });
+
+        const activeContent = document.getElementById(tabId);
+        const activeBtn = document.getElementById(`btn-${tabId}`);
+        if (activeContent) activeContent.classList.remove('hidden');
+        if (activeBtn) {
+            activeBtn.classList.remove('border-transparent', 'text-slate-500');
+            activeBtn.classList.add('border-indigo-600', 'text-indigo-600');
+        }
+    },
+
+    updateUI() {
+        // Update Room Badge Header
+        const roomBadge = document.getElementById("current-group-badge");
+        if (roomBadge && this.currentRoom) {
+            roomBadge.textContent = this.currentRoom.group_name;
+            roomBadge.classList.remove("hidden");
         }
 
-        // Fallback JS Engine
+        // Render Members List
+        this.renderMemberList();
+
+        // Render Matrix Input Grid
+        if (window.MatrixUI) {
+            window.MatrixUI.renderInputGrid(
+                this.members,
+                this.activeMemberIndex,
+                (d, s) => this.toggleSlot(d, s)
+            );
+        }
+
+        // Run analysis
+        const analysis = this.analyzeScheduleLocal();
+        
+        // Stats
+        document.getElementById("stat-members-count").textContent = this.members.length;
+        document.getElementById("stat-optimal-slots").textContent = analysis.optimal_slots ? analysis.optimal_slots.length : 0;
+        document.getElementById("member-badge").textContent = this.members.length;
+
+        // Render Heatmap
+        if (window.MatrixUI) {
+            window.MatrixUI.renderHeatmap(analysis, (slot) => this.selectSlotForVenues(slot));
+        }
+
+        this.renderTopSlots(analysis);
+        this.applyVenueFilters();
+    },
+
+    analyzeScheduleLocal() {
+        if (this.analysisResult) return this.analysisResult;
+        
         const n = this.members.length;
+        if (n === 0) return { aggregate_matrix: [], ranked_slots: [], optimal_slots: [] };
+
         const agg = Array(7).fill(0).map(() => Array(6).fill(0));
         this.members.forEach(m => {
             for (let d = 0; d < 7; d++) {
                 for (let s = 0; s < 6; s++) {
-                    agg[d][s] += m.matrix[d][s];
+                    if (m.matrix && m.matrix[d]) {
+                        agg[d][s] += m.matrix[d][s];
+                    }
                 }
             }
         });
 
-        const ranked = [];
-        const DAYS = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"];
-        const SLOTS = ["08:00 - 10:00", "10:00 - 12:00", "12:00 - 14:00", "14:00 - 16:00", "16:00 - 18:00", "18:00 - 20:00"];
-        const TAGS = ["morning", "morning", "noon", "afternoon", "afternoon", "evening"];
+        const k = Math.max(1, Math.floor(n * (this.currentRoom?.threshold_pct || 0.8)));
+        const optimal = [];
+        const subOptimal = [];
 
         for (let d = 0; d < 7; d++) {
             for (let s = 0; s < 6; s++) {
                 const count = agg[d][s];
-                const status = count === n ? "optimal" : (count >= Math.max(1, Math.floor(n * 0.8)) ? "sub_optimal" : "conflict");
-                const avail = this.members.filter(m => m.matrix[d][s] === 1).map(m => m.name);
-                const absent = this.members.filter(m => m.matrix[d][s] === 0).map(m => m.name);
-
-                ranked.push({
+                const slotObj = {
                     day_index: d,
                     slot_index: s,
-                    day_name: DAYS[d],
-                    slot_label: SLOTS[s],
-                    slot_tag: TAGS[s],
                     available_count: count,
                     total_members: n,
-                    score: count * 10,
-                    status: status,
-                    available_members: avail,
-                    absent_members: absent
-                });
+                    status: count === n ? "optimal" : count >= k ? "sub_optimal" : "conflict"
+                };
+                if (count === n) optimal.push(slotObj);
+                else if (count >= k) subOptimal.push(slotObj);
             }
         }
 
-        ranked.sort((a, b) => b.score - a.score);
-        return {
-            aggregate_matrix: agg,
-            ranked_slots: ranked,
-            optimal_slots: ranked.filter(r => r.status === "optimal"),
-            sub_optimal_slots: ranked.filter(r => r.status === "sub_optimal"),
-            conflict_slots: ranked.filter(r => r.status === "conflict"),
-            summary: {
-                total_members: n,
-                optimal_count: ranked.filter(r => r.status === "optimal").length,
-                sub_optimal_count: ranked.filter(r => r.status === "sub_optimal").length
-            }
-        };
+        return { aggregate_matrix: agg, optimal_slots: optimal, sub_optimal_slots: subOptimal };
     },
 
-    updateUI() {
-        // Update stats
-        document.getElementById("stat-members-count").innerText = this.members.length;
-        document.getElementById("member-badge").innerText = this.members.length;
+    renderMemberList() {
+        const container = document.getElementById("member-list-container");
+        if (!container) return;
+        container.innerHTML = "";
 
-        // Render member list
-        const memberContainer = document.getElementById("member-list-container");
-        if (memberContainer) {
-            memberContainer.innerHTML = this.members.map((m, idx) => `
-                <div onclick="window.app.selectMember(${idx})" 
-                     class="p-2.5 rounded-lg border cursor-pointer flex justify-between items-center ${idx === this.activeMemberIndex ? 'bg-indigo-50 border-indigo-500 font-bold text-indigo-900' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700'}">
-                    <span class="truncate"><i class="fa-solid fa-user-circle mr-2 text-indigo-500"></i>${m.name}</span>
-                    <button onclick="event.stopPropagation(); window.app.removeMember(${idx})" class="text-rose-500 hover:text-rose-700 px-1.5 py-0.5 text-xs rounded">
-                        <i class="fa-solid fa-trash"></i>
-                    </button>
+        this.members.forEach((m, idx) => {
+            const isActive = idx === this.activeMemberIndex;
+            const div = document.createElement("div");
+            div.className = `flex items-center justify-between p-2.5 rounded-lg border text-xs cursor-pointer transition ${
+                isActive ? "bg-indigo-50 border-indigo-300 font-bold text-indigo-900 shadow-sm" : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+            }`;
+            div.onclick = () => this.selectMember(idx);
+
+            div.innerHTML = `
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <i class="fa-solid fa-user-circle text-sm ${isActive ? "text-indigo-600" : "text-slate-400"}"></i>
+                    <span class="truncate">${m.name}</span>
                 </div>
-            `).join("");
-        }
-
-        // Render input grid
-        if (this.members.length > 0) {
-            const activeM = this.members[this.activeMemberIndex];
-            document.getElementById("current-editing-title").innerHTML = `
-                Khai Báo Lịch: <span class="text-indigo-600 font-bold">${activeM.name}</span>
+                <button onclick="event.stopPropagation(); window.app.removeMember(${idx})" class="text-slate-400 hover:text-rose-600 p-1">
+                    <i class="fa-solid fa-trash-can"></i>
+                </button>
             `;
-            window.MatrixUI.renderInputGrid("input-grid-container", activeM.matrix);
-        }
-
-        // Run Analysis
-        const analysis = this.analyzeSchedule();
-        document.getElementById("stat-optimal-slots").innerText = analysis.summary.optimal_count;
-
-        // Render Heatmap
-        window.MatrixUI.renderHeatmap("heatmap-container", analysis.aggregate_matrix, this.members.length);
-
-        // Render Top Recommended Slots
-        this.renderTopSlotsList(analysis);
-
-        // Auto update URL hash
-        this.saveToUrlHash();
+            container.appendChild(div);
+        });
     },
 
-    renderTopSlotsList(analysis) {
+    renderTopSlots(analysis) {
         const container = document.getElementById("top-slots-container");
         if (!container) return;
+        container.innerHTML = "";
 
-        const topSlots = analysis.ranked_slots.slice(0, 5);
-        if (topSlots.length === 0 || this.members.length === 0) {
-            container.innerHTML = `<p class="text-sm text-slate-400">Chưa có dữ liệu xếp hạng.</p>`;
+        const slots = [...(analysis.optimal_slots || []), ...(analysis.sub_optimal_slots || [])].slice(0, 5);
+
+        if (slots.length === 0) {
+            container.innerHTML = `<p class="text-xs text-slate-500 italic text-center py-4">Chưa có khung giờ rảnh khớp nhau giữa các thành viên.</p>`;
             return;
         }
 
-        container.innerHTML = topSlots.map((slot, idx) => `
-            <div class="p-3 bg-white border border-slate-200 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                <div class="flex items-center gap-3">
-                    <span class="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 font-bold text-xs flex items-center justify-center">#${idx + 1}</span>
-                    <div>
-                        <h4 class="font-bold text-slate-900 text-sm">${slot.day_name} | ${slot.slot_label}</h4>
-                        <p class="text-xs text-slate-500">
-                            Có <strong class="text-emerald-600">${slot.available_count}/${slot.total_members}</strong> rảnh
-                            ${slot.absent_members.length > 0 ? `(Vắng: ${slot.absent_members.join(", ")})` : '(Đầy đủ)'}
-                        </p>
-                    </div>
+        const days = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"];
+        const timeLabels = ["08:00 - 10:00", "10:00 - 12:00", "12:00 - 14:00", "14:00 - 16:00", "16:00 - 18:00", "18:00 - 20:00"];
+
+        slots.forEach(slot => {
+            const isOpt = slot.status === "optimal";
+            const div = document.createElement("div");
+            div.className = `p-3 rounded-lg border flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-xs ${
+                isOpt ? "bg-emerald-50 border-emerald-200 text-emerald-900" : "bg-amber-50 border-amber-200 text-amber-900"
+            }`;
+
+            div.innerHTML = `
+                <div>
+                    <span class="font-bold text-sm">${days[slot.day_index]} • ${timeLabels[slot.slot_index]}</span>
+                    <span class="ml-2 font-semibold">(${slot.available_count}/${slot.total_members} người rảnh)</span>
                 </div>
-                <button onclick="window.app.selectSlotForRecommendation(${slot.day_index}, ${slot.slot_index})" 
-                        class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition">
-                    <i class="fa-solid fa-map-pin"></i> Chọn & Tìm Địa Điểm
+                <button onclick="window.app.selectSlotForVenues({day_index:${slot.day_index}, slot_index:${slot.slot_index}})" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs">
+                    Gợi Ý Địa Điểm <i class="fa-solid fa-arrow-right ml-1"></i>
                 </button>
-            </div>
-        `).join("");
+            `;
+            container.appendChild(div);
+        });
     },
 
-    selectSlotForRecommendation(dayIdx, slotIdx) {
-        const analysis = this.analyzeSchedule();
-        const slot = analysis.ranked_slots.find(s => s.day_index === dayIdx && s.slot_index === slotIdx);
-        if (!slot) return;
-
+    selectSlotForVenues(slot) {
         this.selectedSlot = slot;
-        this.switchTab('tab-venues');
+        const timeTags = ["morning", "morning", "noon", "afternoon", "afternoon", "evening"];
+        const slotTag = timeTags[slot.slot_index] || "morning";
 
-        document.getElementById("selected-slot-banner").innerHTML = `
-            <div class="p-4 bg-indigo-900 text-white rounded-xl flex justify-between items-center shadow">
-                <div>
-                    <span class="text-xs text-indigo-300 font-semibold uppercase tracking-wider">Khung Giờ Đã Chốt</span>
-                    <h3 class="text-lg font-bold">${slot.day_name} | ${slot.slot_label}</h3>
-                    <p class="text-xs text-indigo-200">${slot.available_count}/${slot.total_members} người tham gia: ${slot.available_members.join(", ")}</p>
+        const banner = document.getElementById("selected-slot-banner");
+        if (banner) {
+            const days = ["Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7", "Chủ Nhật"];
+            const timeLabels = ["08:00 - 10:00", "10:00 - 12:00", "12:00 - 14:00", "14:00 - 16:00", "16:00 - 18:00", "18:00 - 20:00"];
+            banner.innerHTML = `
+                <div class="p-4 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-900 text-sm font-semibold flex justify-between items-center">
+                    <span><i class="fa-solid fa-clock text-indigo-600 mr-2"></i>Đang xem địa điểm cho: <strong>${days[slot.day_index]} (${timeLabels[slot.slot_index]})</strong></span>
+                    <span class="text-xs bg-indigo-200 text-indigo-800 px-2.5 py-1 rounded-full uppercase font-bold">${slotTag}</span>
                 </div>
-                <span class="px-3 py-1 bg-emerald-500 text-white font-bold text-xs rounded-full">Tag: ${slot.slot_tag.toUpperCase()}</span>
-            </div>
-        `;
+            `;
+        }
 
-        this.renderVenueRecommendations(slot.slot_tag);
+        this.switchTab("tab-venues");
+        this.applyVenueFilters();
     },
 
     populateCityFilter() {
         const citySelect = document.getElementById("filter-city");
         if (!citySelect) return;
-
-        const cities = Array.from(new Set(this.venues.map(v => v.city || "TP. Hồ Chí Minh"))).sort();
-        citySelect.innerHTML = `<option value="all">Tất cả Tỉnh / Thành phố</option>` +
-            cities.map(c => `<option value="${c}">${c}</option>`).join("");
-
-        this.populateWardFilter("all");
+        const cities = Array.from(new Set(this.venues.map(v => v.city))).filter(Boolean);
+        citySelect.innerHTML = `<option value="all">Tất cả Tỉnh / Thành phố (${cities.length})</option>`;
+        cities.forEach(c => {
+            citySelect.innerHTML += `<option value="${c}">${c}</option>`;
+        });
+        this.onCityFilterChange();
     },
 
     onCityFilterChange() {
-        const citySelect = document.getElementById("filter-city");
-        const selectedCity = citySelect ? citySelect.value : "all";
-        this.populateWardFilter(selectedCity);
-        this.applyVenueFilters();
-    },
-
-    populateWardFilter(selectedCity) {
+        const cityVal = document.getElementById("filter-city")?.value || "all";
         const wardSelect = document.getElementById("filter-ward");
         if (!wardSelect) return;
 
-        let filtered = this.venues;
-        if (selectedCity && selectedCity !== "all") {
-            filtered = filtered.filter(v => (v.city || "").toLowerCase() === selectedCity.toLowerCase());
+        let filteredVenues = this.venues;
+        if (cityVal !== "all") {
+            filteredVenues = this.venues.filter(v => v.city.toLowerCase() === cityVal.toLowerCase());
         }
 
-        const wards = Array.from(new Set(filtered.map(v => v.ward).filter(Boolean))).sort();
-        wardSelect.innerHTML = `<option value="all">Tất cả Xã / Phường</option>` +
-            wards.map(w => `<option value="${w}">${w}</option>`).join("");
+        const wards = Array.from(new Set(filteredVenues.map(v => v.ward))).filter(Boolean);
+        wardSelect.innerHTML = `<option value="all">Tất cả Xã / Phường (${wards.length})</option>`;
+        wards.forEach(w => {
+            wardSelect.innerHTML += `<option value="${w}">${w}</option>`;
+        });
+
+        this.applyVenueFilters();
     },
 
     applyVenueFilters() {
-        const slotTag = this.selectedSlot ? this.selectedSlot.slot_tag : "all";
-        this.renderVenueRecommendations(slotTag);
-    },
+        const container = document.getElementById("venue-list-container");
+        if (!container) return;
 
-    switchVenueView(mode) {
-        this.currentVenueView = mode;
-        const listBtn = document.getElementById("btn-view-list");
-        const mapBtn = document.getElementById("btn-view-map");
-        const listContainer = document.getElementById("venue-list-container");
-        const mapContainer = document.getElementById("venue-map-container");
+        const cityVal = document.getElementById("filter-city")?.value || "all";
+        const wardVal = document.getElementById("filter-ward")?.value || "all";
+        const catVal = document.getElementById("filter-category")?.value || "all";
 
-        if (mode === "map") {
-            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
-            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm";
-            if (listContainer) listContainer.classList.add("hidden");
-            if (mapContainer) mapContainer.classList.remove("hidden");
-
-            // Refilter & trigger map resize
-            this.applyVenueFilters();
-            if (this.leafletMap) {
-                setTimeout(() => this.leafletMap.invalidateSize(), 200);
-            }
-        } else {
-            if (listBtn) listBtn.className = "px-3 py-1.5 rounded-md bg-white text-indigo-600 shadow-sm";
-            if (mapBtn) mapBtn.className = "px-3 py-1.5 rounded-md text-slate-600 hover:text-indigo-600";
-            if (listContainer) listContainer.classList.remove("hidden");
-            if (mapContainer) mapContainer.classList.add("hidden");
-
-            this.applyVenueFilters();
-        }
-    },
-
-    renderVenueRecommendations(slotTag) {
-        const listContainer = document.getElementById("venue-list-container");
-        const cityFilter = document.getElementById("filter-city")?.value || "all";
-        const wardFilter = document.getElementById("filter-ward")?.value || "all";
-        const catFilter = document.getElementById("filter-category")?.value || "all";
-
-        // Filter venues
         let filtered = this.venues;
+        if (cityVal !== "all") filtered = filtered.filter(v => v.city.toLowerCase() === cityVal.toLowerCase());
+        if (wardVal !== "all") filtered = filtered.filter(v => v.ward.toLowerCase() === wardVal.toLowerCase());
+        if (catVal !== "all") filtered = filtered.filter(v => v.category === catVal);
 
-        if (slotTag && slotTag !== "all") {
-            filtered = filtered.filter(v => v.time_tags.includes(slotTag) || v.time_tags.includes("all"));
+        container.innerHTML = "";
+        if (filtered.length === 0) {
+            container.innerHTML = `<div class="p-8 text-center text-slate-400 bg-white rounded-xl border">Không có địa điểm nào phù hợp với bộ lọc.</div>`;
+            return;
         }
 
-        if (cityFilter !== "all") {
-            filtered = filtered.filter(v => (v.city || "").toLowerCase() === cityFilter.toLowerCase());
-        }
-
-        if (wardFilter !== "all") {
-            filtered = filtered.filter(v => (v.ward || "").toLowerCase() === wardFilter.toLowerCase());
-        }
-
-        if (catFilter !== "all") {
-            filtered = filtered.filter(v => v.category === catFilter);
-        }
-
-        // Render List View
-        if (listContainer) {
-            if (filtered.length === 0) {
-                listContainer.innerHTML = `<div class="p-8 text-center text-slate-500 bg-white rounded-xl border"><i class="fa-solid fa-store-slash text-3xl mb-2 text-slate-300"></i><p>Không tìm thấy địa điểm phù hợp bộ lọc.</p></div>`;
-            } else {
-                listContainer.innerHTML = filtered.map(v => `
-                    <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col md:flex-row hover:shadow-md transition">
-                        <img src="${v.image_url || 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500'}" alt="${v.name}" class="w-full md:w-48 h-40 object-cover">
-                        <div class="p-4 flex-1 flex flex-col justify-between space-y-2">
-                            <div>
-                                <div class="flex justify-between items-start">
-                                    <div>
-                                        <h3 class="font-bold text-slate-900 text-base">${v.name}</h3>
-                                        <span class="text-[11px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-semibold">${v.ward || ''}, ${v.city || ''}</span>
-                                    </div>
-                                    <span class="text-amber-500 font-bold text-xs"><i class="fa-solid fa-star mr-1"></i>${v.rating}</span>
-                                </div>
-                                <p class="text-xs text-slate-500 mt-1"><i class="fa-solid fa-location-dot mr-1 text-rose-500"></i>${v.address}</p>
-                                <div class="flex flex-wrap gap-1 mt-2">
-                                    ${(v.tags || []).map(t => `<span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[11px]">${t}</span>`).join("")}
-                                </div>
-                            </div>
-                            <div class="flex justify-between items-center border-t pt-2 mt-2">
-                                <span class="text-xs font-semibold text-indigo-600">${v.price_range} • Sức chứa ${v.capacity} người</span>
-                                <button onclick="window.app.lockFinalPlan('${v.id}')" 
-                                        class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-xs font-semibold transition">
-                                    <i class="fa-solid fa-check-double mr-1"></i>Chốt Địa Điểm Này
-                                </button>
-                            </div>
-                        </div>
+        filtered.forEach(v => {
+            const card = document.createElement("div");
+            card.className = "bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row gap-4 items-center";
+            card.innerHTML = `
+                <img src="${v.image_url || 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500'}" class="w-full sm:w-32 h-24 object-cover rounded-lg">
+                <div class="flex-1 space-y-1 text-xs">
+                    <h4 class="font-bold text-slate-900 text-sm">${v.name}</h4>
+                    <p class="text-slate-500"><i class="fa-solid fa-location-dot text-rose-500 mr-1"></i>${v.address}</p>
+                    <div class="flex gap-2 text-indigo-600 font-semibold">
+                        <span>⭐ ${v.rating}</span> • <span>Sức chứa: ${v.capacity} người</span> • <span>${v.price_range}</span>
                     </div>
-                `).join("");
-            }
-        }
-
-        // Render Map View if active or ready
-        this.renderMapView(filtered);
-    },
-
-    renderMapView(filteredVenues) {
-        const mapContainer = document.getElementById("venue-map-container");
-        if (!mapContainer || typeof L === 'undefined') return;
-
-        if (!this.leafletMap) {
-            this.leafletMap = L.map('venue-map-container').setView([10.7769, 106.7009], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OpenStreetMap contributors'
-            }).addTo(this.leafletMap);
-            this.markersLayer = L.layerGroup().addTo(this.leafletMap);
-        }
-
-        this.markersLayer.clearLayers();
-        const bounds = [];
-
-        filteredVenues.forEach(v => {
-            if (v.lat && v.lng) {
-                const marker = L.marker([v.lat, v.lng]);
-                const popupHtml = `
-                    <div class="space-y-1.5 text-xs p-1">
-                        <img src="${v.image_url || 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500'}" class="w-full h-24 object-cover rounded mb-1">
-                        <strong class="text-slate-900 text-sm block">${v.name}</strong>
-                        <p class="text-slate-500"><i class="fa-solid fa-location-dot text-rose-500 mr-1"></i>${v.address}</p>
-                        <p class="text-indigo-600 font-semibold">${v.price_range} • Sức chứa ${v.capacity}p • ⭐ ${v.rating}</p>
-                        <button onclick="window.app.lockFinalPlan('${v.id}')" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold mt-2">
-                            <i class="fa-solid fa-check-double mr-1"></i>Chốt Địa Điểm Này
-                        </button>
-                    </div>
-                `;
-                marker.bindPopup(popupHtml);
-                this.markersLayer.addLayer(marker);
-                bounds.push([v.lat, v.lng]);
-            }
+                </div>
+            `;
+            container.appendChild(card);
         });
-
-        if (bounds.length > 0) {
-            this.leafletMap.fitBounds(bounds, { padding: [40, 40] });
-        }
-    },
-
-    openAddVenueModal() {
-        const modal = document.getElementById("add-venue-modal");
-        if (modal) modal.classList.remove("hidden");
-    },
-
-    closeAddVenueModal() {
-        const modal = document.getElementById("add-venue-modal");
-        if (modal) modal.classList.add("hidden");
-        const status = document.getElementById("gmap-parse-status");
-        if (status) status.classList.add("hidden");
-    },
-
-    async parseGoogleMapsLink() {
-        const input = document.getElementById("new-venue-gmap-link");
-        const status = document.getElementById("gmap-parse-status");
-        if (!input || !input.value.trim()) return;
-
-        let url = input.value.trim();
-
-        if (status) {
-            status.classList.remove("hidden");
-            status.className = "text-[11px] text-indigo-600 font-semibold mt-1 flex items-center gap-1";
-            status.innerHTML = `<i class="fa-solid fa-spinner fa-spin text-indigo-600"></i> Đang giải mã liên kết Google Maps và vị trí GPS...`;
-        }
-
-        try {
-            // Giải mã link rút gọn (maps.app.goo.gl, goo.gl, bit.ly, tinyurl)
-            if (url.includes("maps.app.goo.gl") || url.includes("goo.gl") || url.includes("tinyurl.com") || url.includes("bit.ly")) {
-                try {
-                    const unshortenResp = await fetch(`https://unshorten.me/json/${encodeURIComponent(url)}`);
-                    if (unshortenResp.ok) {
-                        const data = await unshortenResp.json();
-                        if (data && data.resolved_url) {
-                            let resolved = decodeURIComponent(data.resolved_url);
-                            if (resolved.includes("continue=")) {
-                                const matchContinue = resolved.match(/continue=([^&]+)/);
-                                if (matchContinue) {
-                                    resolved = decodeURIComponent(matchContinue[1]);
-                                }
-                            }
-                            url = resolved;
-                        }
-                    }
-                } catch (err) {
-                    console.warn("[App] Unshorten API error, attempting direct regex on link:", err);
-                }
-            }
-
-            let foundLat = null, foundLng = null, foundName = null;
-
-            // 1. Parse !3dLat!4dLng (Exact venue location)
-            const dMatch = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
-            if (dMatch) {
-                foundLat = parseFloat(dMatch[1]);
-                foundLng = parseFloat(dMatch[2]);
-            }
-
-            // 2. Parse @lat,lng (Viewport center)
-            if (foundLat === null) {
-                const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-                if (atMatch) {
-                    foundLat = parseFloat(atMatch[1]);
-                    foundLng = parseFloat(atMatch[2]);
-                }
-            }
-
-            // 3. Parse q=lat,lng or query=lat,lng
-            if (foundLat === null) {
-                const queryMatch = url.match(/[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/);
-                if (queryMatch) {
-                    foundLat = parseFloat(queryMatch[1]);
-                    foundLng = parseFloat(queryMatch[2]);
-                }
-            }
-
-            // 4. Parse Place Name from URL (/place/Name/ or /search/Name/)
-            const placeMatch = url.match(/\/(?:place|search)\/([^\/@?#]+)/);
-            if (placeMatch) {
-                const rawName = placeMatch[1];
-                try {
-                    foundName = decodeURIComponent(rawName.replace(/\+/g, ' ')).trim();
-                } catch (e) {
-                    foundName = rawName.replace(/\+/g, ' ').trim();
-                }
-            }
-
-            const autoFilled = [];
-
-            // Reverse Geocoding với OpenStreetMap Nominatim nếu có tọa độ
-            let foundWard = null, foundCity = null, foundAddress = null;
-            if (foundLat !== null && foundLng !== null) {
-                try {
-                    const nomResp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${foundLat}&lon=${foundLng}`, {
-                        headers: { 'Accept-Language': 'vi' }
-                    });
-                    if (nomResp.ok) {
-                        const nomData = await nomResp.json();
-                        if (nomData && nomData.address) {
-                            const addr = nomData.address;
-                            foundWard = addr.suburb || addr.quarter || addr.neighbourhood || addr.village || addr.ward || null;
-                            foundCity = addr.city || addr.state || addr.province || "TP. Hồ Chí Minh";
-                            foundAddress = nomData.display_name || null;
-                        }
-                    }
-                } catch (err) {
-                    console.warn("[App] Reverse geocoding error:", err);
-                }
-            }
-
-            if (foundName) {
-                const nameField = document.getElementById("new-venue-name");
-                if (nameField) {
-                    nameField.value = foundName;
-                    autoFilled.push(`Tên: "${foundName}"`);
-                }
-            }
-
-            if (foundLat !== null && foundLng !== null) {
-                const latField = document.getElementById("new-venue-lat");
-                const lngField = document.getElementById("new-venue-lng");
-                if (latField) latField.value = foundLat;
-                if (lngField) lngField.value = foundLng;
-                autoFilled.push(`Tọa độ: ${foundLat.toFixed(5)}, ${foundLng.toFixed(5)}`);
-            }
-
-            if (foundWard) {
-                const wardField = document.getElementById("new-venue-ward");
-                if (wardField) {
-                    wardField.value = foundWard;
-                    autoFilled.push(`Phường: ${foundWard}`);
-                }
-            }
-
-            if (foundCity) {
-                const cityField = document.getElementById("new-venue-city");
-                if (cityField) cityField.value = foundCity;
-            }
-
-            if (foundAddress) {
-                const addrField = document.getElementById("new-venue-address");
-                if (addrField && (!addrField.value || addrField.value.trim() === "")) {
-                    addrField.value = foundAddress;
-                }
-            }
-
-            if (status) {
-                if (autoFilled.length > 0) {
-                    status.className = "text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-1";
-                    status.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600"></i> Đã trích xuất thành công: ${autoFilled.join(" | ")}`;
-                } else {
-                    status.className = "text-[11px] text-amber-600 font-semibold mt-1 flex items-center gap-1";
-                    status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-amber-600"></i> Không tìm thấy vị trí từ liên kết. Hãy thử tự điền bên dưới.`;
-                }
-            }
-        } catch (err) {
-            console.error("[App] Lỗi trích xuất Google Maps:", err);
-            if (status) {
-                status.className = "text-[11px] text-rose-600 font-semibold mt-1 flex items-center gap-1";
-                status.innerHTML = `<i class="fa-solid fa-triangle-exclamation text-rose-600"></i> Có lỗi xảy ra khi giải mã liên kết. Vui lòng kiểm tra lại đường dẫn.`;
-            }
-        }
-    },
-
-    saveNewVenue(e) {
-        e.preventDefault();
-
-        const name = document.getElementById("new-venue-name").value.trim();
-        const category = document.getElementById("new-venue-category").value;
-        const price = document.getElementById("new-venue-price").value;
-        const capacity = parseInt(document.getElementById("new-venue-capacity").value, 10) || 30;
-        const rating = parseFloat(document.getElementById("new-venue-rating").value) || 4.5;
-        const city = document.getElementById("new-venue-city").value.trim() || "TP. Hồ Chí Minh";
-        const ward = document.getElementById("new-venue-ward").value.trim() || "Phường Bến Nghé";
-        const address = document.getElementById("new-venue-address").value.trim();
-        const lat = parseFloat(document.getElementById("new-venue-lat").value) || 10.7769;
-        const lng = parseFloat(document.getElementById("new-venue-lng").value) || 106.7009;
-        const tagsStr = document.getElementById("new-venue-tags").value.trim();
-        const imageUrl = document.getElementById("new-venue-image").value.trim() || "https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=500";
-
-        const timeTagBoxes = document.querySelectorAll('#form-add-venue input[name="time_tags"]:checked');
-        const timeTags = Array.from(timeTagBoxes).map(b => b.value);
-
-        const newVenue = {
-            id: "v_custom_" + Date.now(),
-            name: name,
-            category: category,
-            price_range: price,
-            capacity: capacity,
-            rating: rating,
-            city: city,
-            ward: ward,
-            address: address,
-            lat: lat,
-            lng: lng,
-            time_tags: timeTags.length > 0 ? timeTags : ["all"],
-            tags: tagsStr ? tagsStr.split(",").map(t => t.trim()) : ["tự thêm"],
-            image_url: imageUrl
-        };
-
-        this.saveCustomVenue(newVenue);
-        this.venues.push(newVenue);
-
-        this.closeAddVenueModal();
-        document.getElementById("form-add-venue").reset();
-
-        this.populateCityFilter();
-        this.applyVenueFilters();
-
-        alert(`Đã thêm địa điểm "${name}" thành công!`);
-    },
-
-    lockFinalPlan(venueId) {
-        const venue = this.venues.find(v => v.id === venueId);
-        if (!venue || !this.selectedSlot) return;
-
-        this.lockedPlan = {
-            slot: this.selectedSlot,
-            venue: venue,
-            createdAt: new Date().toLocaleDateString("vi-VN")
-        };
-
-        this.switchTab('tab-summary');
-        this.renderSummaryPage();
-    },
-
-    renderSummaryPage() {
-        const container = document.getElementById("summary-content-container");
-        if (!container || !this.lockedPlan) return;
-
-        const { slot, venue } = this.lockedPlan;
-
-        container.innerHTML = `
-            <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-md space-y-6 max-w-2xl mx-auto">
-                <div class="text-center space-y-2">
-                    <span class="bg-emerald-100 text-emerald-800 text-xs px-3 py-1 rounded-full font-bold uppercase tracking-wider">
-                        <i class="fa-solid fa-circle-check mr-1"></i> Kế Hoạch Đã Hoàn Tất
-                    </span>
-                    <h2 class="text-2xl font-bold text-slate-900">Đi Chơi Cùng Nhóm!</h2>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                    <div>
-                        <h4 class="text-xs text-slate-400 uppercase font-bold">Thời Gian</h4>
-                        <p class="font-bold text-indigo-900 text-base">${slot.day_name}</p>
-                        <p class="text-sm text-slate-700 font-semibold">${slot.slot_label}</p>
-                    </div>
-                    <div>
-                        <h4 class="text-xs text-slate-400 uppercase font-bold">Địa Điểm</h4>
-                        <p class="font-bold text-indigo-900 text-base">${venue.name}</p>
-                        <p class="text-xs text-slate-600">${venue.address}</p>
-                    </div>
-                </div>
-
-                <div>
-                    <h4 class="text-xs text-slate-400 uppercase font-bold mb-2">Thành Viên Tham Gia (${slot.available_count}/${slot.total_members})</h4>
-                    <div class="flex flex-wrap gap-2">
-                        ${slot.available_members.map(m => `<span class="bg-emerald-100 text-emerald-800 font-semibold px-3 py-1 rounded-full text-xs"><i class="fa-solid fa-user-check mr-1"></i>${m}</span>`).join("")}
-                    </div>
-                </div>
-
-                <div class="pt-4 border-t flex justify-between items-center">
-                    <button onclick="window.print()" class="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-semibold">
-                        <i class="fa-solid fa-print mr-1"></i> In / Tải PDF
-                    </button>
-                    <button onclick="window.app.copyShareLink()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-semibold">
-                        <i class="fa-solid fa-share-nodes mr-1"></i> Sao Chép Link Kế Hoạch
-                    </button>
-                </div>
-            </div>
-        `;
-    },
-
-    saveToUrlHash() {
-        try {
-            const state = { members: this.members };
-            const jsonStr = JSON.stringify(state);
-            const b64 = btoa(encodeURIComponent(jsonStr));
-            window.location.hash = `group=${b64}`;
-        } catch (e) {
-            console.error("[App] Failed encoding state to URL hash", e);
-        }
-    },
-
-    loadFromUrlHash() {
-        try {
-            const hash = window.location.hash;
-            if (hash.startsWith("#group=")) {
-                const b64 = hash.replace("#group=", "");
-                const jsonStr = decodeURIComponent(atob(b64));
-                const state = JSON.parse(jsonStr);
-                if (state && Array.isArray(state.members)) {
-                    this.members = state.members;
-                    console.log(`[App] Loaded ${this.members.length} members from shared URL Hash.`);
-                    return true;
-                }
-            }
-        } catch (e) {
-            console.error("[App] Failed decoding state from URL hash", e);
-        }
-        return false;
-    },
-
-    copyShareLink() {
-        this.saveToUrlHash();
-        navigator.clipboard.writeText(window.location.href);
-        alert("Đã sao chép link cuộc hẹn! Hãy gửi link này cho các thành viên trong nhóm để xem ma trận lịch.");
-    },
-
-    switchTab(tabId) {
-        document.querySelectorAll('.tab-content').forEach(el => el.classList.replace('block', 'hidden'));
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.classList.remove('border-indigo-600', 'text-indigo-600');
-            btn.classList.add('border-transparent', 'text-slate-500');
-        });
-
-        const activeContent = document.getElementById(tabId);
-        const activeBtn = document.getElementById('btn-' + tabId);
-
-        if (activeContent) activeContent.classList.replace('hidden', 'block');
-        if (activeBtn) {
-            activeBtn.classList.remove('border-transparent', 'text-slate-500');
-            activeBtn.classList.add('border-indigo-600', 'text-indigo-600');
-        }
     }
 };
 
-// Initialize on DOM ready
 document.addEventListener("DOMContentLoaded", () => {
     window.app.init();
 });
